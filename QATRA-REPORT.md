@@ -1,11 +1,10 @@
 # Qatra — start report
 
 Module M352, Advanced AI Engineering.  
-Owner and backend lead: Mohammed Amine El Atrach.  
-Team size: 5.  
+Team of five, same level.  
 Product name: **Qatra**.
 
-This is the document the five of you build from. It describes the full product: the farmer site, WhatsApp, the advisor view, the water-balance engine, satellite, spray window, and explanations. What you later put on the defense slides can be chosen from this same system.
+This is the document the team builds from. It describes the full product: the farmer site, WhatsApp, the advisor view, the water-balance engine, satellite, spray window, and explanations. What you later put on the defense slides can be chosen from this same system.
 
 ## 1. What Qatra is
 
@@ -21,9 +20,9 @@ The farmer reads this on a phone website and on WhatsApp, as text and as a Darij
 
 The language model explains numbers that code has already computed. It writes Darija, French, and Arabic. It does not invent the dose, the index, or the spray rate.
 
-## 2. What we take from the 9atra note
+## 2. Engineering choices
 
-The friend’s breakdown is the engineering skeleton. These pieces enter Qatra as specified:
+These pieces are part of the build:
 
 - JWT registration and login, roles, and rate limiting on public auth routes.
 - PostgreSQL with PostGIS for plot polygons and area.
@@ -39,7 +38,7 @@ The friend’s breakdown is the engineering skeleton. These pieces enter Qatra a
 Three decisions stay with Qatra, because they are what the course and the agronomy both require:
 
 - **One website, not a second mobile codebase.** Mapbox runs in the phone browser. WhatsApp is the phone channel. A Flutter or React Native app would split the interface person across two products during the six weeks. A store app can follow after the defense.
-- **The explanation agent stays a full seat.** The friend’s fifth seat was only DevOps. This module is an AI course, so that seat owns the language model, the FAO and INRA documents, Ask Qatra, and the tests. Amine owns Docker. The explanation seat owns the GitHub Actions test.
+- **The explanation agent stays a full seat.** The fifth seat owns the language model, the FAO and INRA documents, Ask Qatra, and the tests. The backend seat owns Docker. The explanation seat owns the GitHub Actions test.
 - **Disease names for citrus come from an agronomist.** Mildiou and oïdium are vine and vegetable diseases. Berkane citrus is a different crop. The spray-window mechanism stays: risk from temperature, humidity, and rain, volume from plot area, block when wind exceeds 15 km/h. Until an agronomist names the citrus disease, the alert label is `fungal_risk`, and the factors that raised it are stored beside it.
 
 ## 3. Users
@@ -110,7 +109,7 @@ The page and WhatsApp both talk to the API. Neither one invents a dose.
 
 The root-zone balance then applies useful rain, water already given, and drip or surface efficiency. The same agent raises `fungal_risk` from temperature, humidity, and rain, computes a spray volume from plot area and the configured rate per 100 L, and blocks that spray when wind is above 15 km/h. The rule and the factors are stored with the alert.
 
-**Validator.** Sits in front of anything the farmer can see. `show_dose` requires a known stage, a known irrigation method, ET0 newer than 48 hours, and a satellite scene no older than 10 days. Otherwise the status is `needs_check`. Spray text is withheld when the wind rule fails. Owner: Amine.
+**Validator.** Sits in front of anything the farmer can see. `show_dose` requires a known stage, a known irrigation method, ET0 newer than 48 hours, and a satellite scene no older than 10 days. Otherwise the status is `needs_check`. Spray text is withheld when the wind rule fails. The backend seat builds this gate.
 
 **Agent Explication.** Writes Darija, French, and Arabic from the validated JSON and a small FAO and INRA folder. Ask Qatra on the web and from WhatsApp uses that same JSON. Every number in the text already exists in the result. If the model is down, a template fills the three languages from the JSON fields.
 
@@ -187,7 +186,7 @@ Example when data are weak:
 
 ## 7. Shared contract
 
-Amine publishes `docs/contract.json` on day 2. Field names change only with his approval. Data, Agronomy, Interface, and Explanation all code against this file.
+The team publishes `docs/contract.json` on day 2. A field name changes only when the five agree. Satellite, Agronomy, Interface, and Explanation all code against this file.
 
 ```json
 {
@@ -324,18 +323,20 @@ The web app is Next.js with Mapbox GL for drawing and for the vigor overlay.
 
 ```mermaid
 flowchart LR
-  amine[Amine backend lead]
+  backend[Backend]
   satDev[Satellite]
   agroDev[Agronomy]
   uiDev[Interface]
   aiDev[Explanation and QA]
-  amine --> satDev
-  amine --> agroDev
-  amine --> uiDev
-  amine --> aiDev
+  demo[One citrus plot]
+  backend --> demo
+  satDev --> demo
+  agroDev --> demo
+  uiDev --> demo
+  aiDev --> demo
 ```
 
-**Amine — owner and backend lead.** JWT and registration, PostGIS and migrations, Farmer, Plot, and Recommendation models, the REST API, roles, rate limiting, the orchestrator, the validator, and Docker Compose. He merges to main. He is the only person who renames a field. He keeps plot `MA-001`, talks to the agronomist, and presents.
+**Backend.** JWT and registration, PostGIS and migrations, Farmer, Plot, and Recommendation models, the REST API, roles, rate limiting, the orchestrator, the validator, and Docker Compose.
 
 **Satellite.** Earth Engine, NDVI and NDWI, cloud masking, Sentinel-1 fallback, PNG overlays, and the daily imagery fetch. Missing data stay null.
 
@@ -347,11 +348,11 @@ flowchart LR
 
 ### Working rules
 
-- One repository. One branch per person. Amine merges.
-- The JSON contract is published on day 2. Nobody invents a private format.
+- One repository. One branch per person. A teammate reviews each pull request.
+- The JSON contract is published on day 2. The group keeps one shared format.
 - A recommendation stores the engine version and the time of each input.
 - Week 1 is the only week seats can move.
-- Monday: 30 minutes. Amine sets the week’s goal.
+- Monday: 30 minutes. The group sets the week’s goal.
 - Friday: each person demos on plot `MA-001`.
 - A blocker older than one day is reported the same day.
 
@@ -359,11 +360,11 @@ The team demo is done when one citrus plot in Morocco can be drawn on a phone, w
 
 ## 12. Six weeks
 
-**Week 1 — contract.** Amine creates the repo, Compose with PostGIS and Redis, the sample plot, and `docs/contract.json`. Satellite reads one Earth Engine scene for that coordinate, or records why access is still pending. Agronomy returns ET0 from a fixed weather sample and passes ETc = 3.15. Interface shows a Mapbox map of Morocco. Explanation returns French and Darija for the fake JSON, with no extra numbers.
+**Week 1 — contract.** Backend creates Compose with PostGIS and Redis, the sample plot, and `docs/contract.json`. Satellite reads one Earth Engine scene for that coordinate, or records why access is still pending. Agronomy returns ET0 from a fixed weather sample and passes ETc = 3.15. Interface shows a Mapbox map of Morocco. Explanation returns French and Darija for the fake JSON, with no extra numbers.
 
-**Week 2 — accounts and live inputs.** Amine ships register, login, and plot create with a polygon. Agronomy stores Open-Meteo weather and the Penman-Monteith result in the contract fields. Satellite writes NDVI, NDWI, date, and valid-pixel share. Interface draws a polygon and posts it. Explanation explains a real agronomy JSON in three languages.
+**Week 2 — accounts and live inputs.** Backend ships register, login, and plot create with a polygon. Agronomy stores Open-Meteo weather and the Penman-Monteith result in the contract fields. Satellite writes NDVI, NDWI, date, and valid-pixel share. Interface draws a polygon and posts it. Explanation explains a real agronomy JSON in three languages.
 
-**Week 3 — one plot end to end.** Amine runs weather, satellite, agronomy, and the validator on `MA-001`. Validator cases: missing image, image older than 10 days, wind at 16 km/h. Interface shows the card with forecast time and image time as two facts. Satellite adds the PNG overlay.
+**Week 3 — one plot end to end.** Backend runs weather, satellite, agronomy, and the validator on `MA-001`. Validator cases: missing image, image older than 10 days, wind at 16 km/h. Interface shows the card with forecast time and image time as two facts. Satellite adds the PNG overlay.
 
 **Week 4 — farmer product.** The farmer path works from the map to the card. Agronomy adds `fungal_risk` and the spray volume from area. Explanation ships Ask Qatra. Interface sends one WhatsApp text to a test number. Satellite survives a failed Earth Engine call without crashing the API.
 
@@ -385,9 +386,9 @@ If Earth Engine access is still closed in week 5, the daily job still runs on we
 
 ## 14. Start this week
 
-1. Amine creates the repository and invites the four people.
-2. He commits Compose, `.env.example`, `docs/contract.json`, `docs/assumptions.md`, and this report.
-3. He writes the four names next to Satellite, Agronomy, Interface, and Explanation.
+1. The team opens the repository and each person takes one seat: Backend, Satellite, Agronomy, Interface, or Explanation.
+2. Backend commits Compose, `.env.example`, `docs/contract.json`, and `docs/assumptions.md`.
+3. The five names go next to the five seats in this report.
 4. Each person opens a branch.
 5. Friday of week 1 shows four proofs on `MA-001`: Compose up, one ET0 result with ETc = 3.15, one satellite read or a written access blocker, a Mapbox map, and a French-and-Darija explanation of the fake contract file.
 
