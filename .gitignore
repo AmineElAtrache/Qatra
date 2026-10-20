@@ -1,0 +1,22 @@
+# Local project notes. Keep this file on disk, not on GitHub.
+QATRA-REPORT.md
+
+# Editor
+.cursor/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
+.next/
+dist/
+out/
