@@ -1,4 +1,3 @@
-Voici votre texte structuré et mis en forme de manière claire et lisible, sous forme de tableau interactif et bien organisé par membre :
 
 ---
 
