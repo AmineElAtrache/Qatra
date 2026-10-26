@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Qatra — Documentation</title>
+<style>
+  @page {
+    size: A4;
+    margin: 17mm 15mm 17mm 15mm;
+    @bottom-left {
+      content: "Qatra";
+      font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 8pt;
+      font-weight: 700;
+      color: #FF6B00;
+    }
+    @bottom-center {
+      content: "M352 · Advanced AI Engineering";
+      font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 7.5pt;
+      color: #94A3B8;
+    }
+    @bottom-right {
+      content: counter(page);
+      font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 8.5pt;
+      font-weight: 700;
+      color: #0B1F3A;
+    }
+  }
+  @page :first {
+    margin: 0;
+    @bottom-left { content: none; }
+    @bottom-center { content: none; }
+    @bottom-right { content: none; }
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #FFFFFF;
+    color: #0B1F3A;
+    font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 10pt;
+    line-height: 1.5;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* ========== COVER ========== */
+  .cover {
+    page-break-after: always;
+    height: 297mm;
+    width: 210mm;
+    background: #FFFFFF;
+    position: relative;
+    overflow: hidden;
+    z-index: 100;
+  }
+  .cover-full {
+    position: absolute;
+    inset: 0;
+    width: 210mm;
+    height: 297mm;
+    object-fit: cover;
+    object-position: center top;
+    display: block;
+  }
+  /* Replace school line on the mock with the real ENIAD logo */
+  .cover-logo-patch {
+    position: absolute;
+    top: 2mm;
+    left: 4mm;
+    width: 118mm;
+    height: 28mm;
+    background: #FFFFFF;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    padding: 1mm 3mm;
+  }
+  .cover-logo-patch img {
+    height: 14mm;
+    width: auto;
+    max-width: 105mm;
+    object-fit: contain;
+    object-position: left center;
+    display: block;
+  }
+  .page-break {
+    page-break-before: always;
+  }
+  .keep {
+    page-break-inside: avoid;
+  }
+
+  /* ========== TYPE ========== */
+  h2 {
+    font-size: 19pt;
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    margin: 0 0 3.2mm;
+    color: #0B1F3A;
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 9pt;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: #1B4F9C;
+    margin: 5.5mm 0 2mm;
+    page-break-after: avoid;
+  }
+  p { margin: 0 0 2.6mm; }
+  .lead {
+    font-size: 11.5pt;
+    line-height: 1.45;
+    color: #334155;
+  }
+  .muted { color: #64748B; font-size: 9pt; }
+
+  .chapter { page-break-before: always; }
+  .block { margin-bottom: 4.5mm; }
+
+  .eyebrow {
+    display: inline-block;
+    font-size: 7.5pt;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #FFFFFF;
+    background: #FF6B00;
+    padding: 1.2mm 3mm;
+    margin-bottom: 2.5mm;
+  }
+  .eyebrow.blue {
+    background: #1B4F9C;
+  }
+
+  ul, ol { margin: 0 0 3mm; padding-left: 4.5mm; }
+  li { margin-bottom: 1.1mm; }
+
+  /* ========== CARDS ========== */
+  .grid3, .grid2 { display: grid; gap: 3mm; margin: 3.5mm 0 4mm; }
+  .grid3 { grid-template-columns: 1fr 1fr 1fr; }
+  .grid2 { grid-template-columns: 1fr 1fr; }
+  .card {
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-top: 3.5px solid #FF6B00;
+    padding: 3.2mm 3.2mm;
+    page-break-inside: avoid;
+  }
+  .card.blue {
+    border-top-color: #1B4F9C;
+  }
+  .card .t {
+    font-size: 8pt;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #FF6B00;
+    margin-bottom: 1.2mm;
+  }
+  .card.blue .t { color: #1B4F9C; }
+  .card p { margin: 0; font-size: 9pt; color: #334155; line-height: 1.4; }
+
+  /* ========== FORMULA ========== */
+  .formula {
+    background: linear-gradient(110deg, #0B1F3A 0%, #1B4F9C 100%);
+    color: #FFFFFF;
+    padding: 5mm 5.5mm;
+    margin: 3.5mm 0;
+    page-break-inside: avoid;
+    position: relative;
+    overflow: hidden;
+  }
+  .formula::after {
+    content: "";
+    position: absolute;
+    right: -8mm;
+    top: -8mm;
+    width: 32mm;
+    height: 32mm;
+    background: #FF6B00;
+    border-radius: 50%;
+    opacity: 0.9;
+  }
+  .formula .eq {
+    position: relative;
+    z-index: 1;
+    font-size: 16pt;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin-bottom: 1.5mm;
+  }
+  .formula p {
+    position: relative;
+    z-index: 1;
+    margin: 0;
+    color: #D0EBFF;
+    font-size: 9pt;
+    max-width: 145mm;
+  }
+
+  .callout {
+    background: #FFF4E6;
+    border-left: 4px solid #FF6B00;
+    padding: 3mm 3.5mm;
+    margin: 3.5mm 0;
+    page-break-inside: avoid;
+    font-size: 9.5pt;
+  }
+  .callout .lab {
+    font-size: 7pt;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #FF6B00;
+    margin-bottom: 1mm;
+  }
+
+  .quote {
+    border-left: 4px solid #1B4F9C;
+    background: #EFF6FF;
+    margin: 3.5mm 0;
+    padding: 3.2mm 4mm;
+    font-size: 10.5pt;
+    color: #0B1F3A;
+    page-break-inside: avoid;
+  }
+  .quote cite {
+    display: block;
+    margin-top: 1.5mm;
+    font-style: normal;
+    font-size: 7.5pt;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #FF6B00;
+  }
+
+  /* ========== TABLES ========== */
+  h3 + table, h3 + .grid2, h3 + .grid3, h3 + .flow, h3 + ol, h3 + ul {
+    page-break-before: avoid;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 2.5mm 0 4mm;
+    font-size: 8.2pt;
+    line-height: 1.35;
+    page-break-inside: auto;
+  }
+  tr { page-break-inside: avoid; }
+  thead { display: table-header-group; }
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    padding: 2.1mm 2.2mm;
+    border-bottom: 1px solid #E2E8F0;
+  }
+  th {
+    background: #0B1F3A;
+    color: #FFFFFF;
+    font-size: 7pt;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-bottom: 3px solid #FF6B00;
+  }
+  tr:nth-child(even) td { background: #F8FAFC; }
+  .mono {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 7.8pt;
+  }
+  pre {
+    background: #0B1F3A;
+    color: #E2E8F0;
+    border-left: 4px solid #FF6B00;
+    padding: 3.5mm 4mm;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 7.2pt;
+    line-height: 1.4;
+    margin: 2.5mm 0 4mm;
+    white-space: pre-wrap;
+    page-break-inside: avoid;
+  }
+
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 2mm;
+    margin: 2.5mm 0 3mm;
+  }
+  .step {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-bottom: 3px solid #FF6B00;
+    padding: 2.2mm;
+    page-break-inside: avoid;
+  }
+  .step:nth-child(even) { border-bottom-color: #1B4F9C; }
+  .step .n {
+    display: block;
+    width: 6.5mm;
+    height: 6.5mm;
+    line-height: 6.5mm;
+    text-align: center;
+    background: #FF6B00;
+    color: #FFFFFF;
+    font-size: 8.5pt;
+    font-weight: 800;
+    margin-bottom: 2mm;
+  }
+  .step:nth-child(even) .n { background: #1B4F9C; }
+  .step .t {
+    display: block;
+    font-size: 8pt;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 1mm;
+    color: #0B1F3A;
+  }
+  .step p { margin: 0; font-size: 8pt; color: #64748B; }
+
+  .compare td:first-child {
+    font-weight: 800;
+    color: #FF6B00;
+    white-space: nowrap;
+  }
+
+  .sources { font-size: 8.5pt; color: #475569; }
+  .sources li { margin-bottom: 1.8mm; }
+  .divider {
+    height: 3px;
+    background: linear-gradient(90deg, #FF6B00 0%, #1B4F9C 100%);
+    margin: 5mm 0;
+    border: none;
+  }
+
+  .banner {
+    background: #0B1F3A;
+    color: #FFFFFF;
+    padding: 4mm 5mm;
+    margin: 0 0 4mm;
+    page-break-inside: avoid;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4mm;
+    align-items: center;
+  }
+  .banner p { margin: 0; font-size: 10pt; color: #D0EBFF; }
+  .banner strong { color: #FFFFFF; }
+  .banner .tag {
+    background: #FF6B00;
+    color: #FFFFFF;
+    font-size: 8pt;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2mm 3.5mm;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<section class="cover">
+  <img class="cover-full" src="assets/cover-orchard.jpg" alt="Qatra — page de garde" />
+  <div class="cover-logo-patch">
+    <img src="assets/eniad-logo.png" alt="ENIAD Berkane" />
+  </div>
+</section>
+
+<!-- 01 -->
+<section class="block">
+  <span class="eyebrow">01 · Synthèse</span>
+  <h2>En une page</h2>
+  <div class="banner">
+    <p><strong>Qatra</strong> estime chaque jour le besoin en eau d'une parcelle d'agrumes, lit le couvert par satellite, et dit si une pulvérisation est raisonnable.</p>
+    <span class="tag">Décision · Pas un chatbot</span>
+  </div>
+  <p class="lead">L'agriculteur lit le résultat sur un site de téléphone et par notification (site ou Telegram). Le conseiller voit les mêmes parcelles sur une carte. Le chiffre vient d'un bilan hydrique FAO-56. Le modèle de langage (Ollama en local) explique ce chiffre déjà calculé, en darija, en français et en arabe.</p>
+  <div class="grid3">
+    <article class="card"><div class="t">Irrigation</div><p>Besoin restant de la culture, en millimètres, après la pluie utile et l'eau déjà apportée.</p></article>
+    <article class="card blue"><div class="t">Couvert</div><p>NDVI et NDWI Sentinel-2, avec la date de l'image. Si les nuages cachent la parcelle, Sentinel-1 sert de repli, sans inventer d'indice.</p></article>
+    <article class="card"><div class="t">Fenêtre de traitement</div><p>Alerte de risque selon la météo, volume lié à la surface, et blocage si le vent dépasse 15 km/h.</p></article>
+  </div>
+  <p class="muted">Qatra ne remplace pas le tour d'eau d'un ORMVA. Il aide à utiliser l'eau le jour où elle arrive.</p>
+</section>
+
+<!-- 02 -->
+<section class="block">
+  <span class="eyebrow blue">02 · Contexte</span>
+  <h2>Le problème</h2>
+  <p>Au Maroc, l'agriculture concentre l'essentiel de l'eau consommée, et les années sèches se répètent. Les réseaux se modernisent et le goutte-à-goutte se généralise. La décision du jour, sur une parcelle précise, reste souvent une habitude : trop tôt, trop tard, ou la même dose pour un sol, un stade et une pluie différents.</p>
+  <p>Le bulletin régional donne le même message à toute une plaine. Deux parcelles voisines ne vivent pas la même semaine. Le conseiller de l'ORMVA, de la coopérative ou de l'association d'usagers ne peut pas visiter chaque exploitation. Une erreur à la floraison ou au grossissement se paie sur le rendement.</p>
+  <h3>Deux utilisateurs, un seul résultat</h3>
+  <div class="grid2">
+    <article class="card"><div class="t">Agriculteur</div><p>Il dessine sa parcelle, indique la culture, le système d'irrigation et la dernière irrigation. Il lit la carte du jour. S'il l'a demandé, il reçoit une notification (site ou Telegram) quand la consigne change.</p></article>
+    <article class="card blue"><div class="t">Conseiller</div><p>Il suit plusieurs parcelles : une carte du statut, une liste de visites, et le total d'eau de la saison. Il voit les parcelles qui lui sont liées, pas celles des autres.</p></article>
+  </div>
+</section>
+
+<!-- 03 -->
+<section class="block chapter">
+  <span class="eyebrow">03 · Méthode</span>
+  <h2>Le principe</h2>
+  <p>L'intelligence artificielle est autour du calcul, pas à la place du calcul. Quatre rôles sont séparés pour qu'une erreur reste visible.</p>
+  <div class="grid2">
+    <article class="card"><div class="t">Le moteur</div><p>Fonctions Python déterministes. Les mêmes entrées donnent toujours le même résultat. La table des coefficients a une version.</p></article>
+    <article class="card blue"><div class="t">Le satellite</div><p>Un calcul d'indice et un drapeau de qualité. Une baisse de NDVI signale un changement du couvert. Elle ne prouve pas, seule, qu'il faut irriguer.</p></article>
+    <article class="card blue"><div class="t">Le validateur</div><p>Il autorise <span class="mono">show_dose</span> ou il renvoie <span class="mono">needs_check</span>. Le vent au-dessus de 15 km/h bloque le texte de pulvérisation.</p></article>
+    <article class="card"><div class="t">L'explication</div><p>Le seul module autorisé à appeler un modèle de langage. Chaque nombre du texte existe déjà dans le JSON validé.</p></article>
+  </div>
+  <div class="formula">
+    <div class="eq">ETc = Kc × ET0</div>
+    <p>ETc est la consommation estimée de la culture, en millimètres par jour. Kc est le coefficient cultural du stade. ET0 est l'évapotranspiration de référence, calculée par Penman-Monteith. Jour d'exemple, verrouillé par un test : ET0 = 4,2 mm, Kc = 0,75, donc ETc = 3,15 mm.</p>
+  </div>
+  <p>Le moteur met ensuite à jour l'eau de la zone racinaire. Il ajoute l'irrigation déjà enregistrée et seulement la part utile de la pluie prévue. Il soustrait ETc. Il transforme le déficit net en dose brute selon l'efficience du goutte-à-goutte ou de l'irrigation de surface.</p>
+  <p>Une dose précise n'est montrée que si le stade est connu, la méthode d'irrigation est connue, la météo a moins de 48 heures, et l'image satellite, si elle existe, a au plus 10 jours avec au moins 70 % de pixels valides. Sinon le statut est <span class="mono">needs_check</span>.</p>
+  <div class="quote">
+    Besoin à vérifier. La météo du jour est disponible. La dernière image satellite est trop ancienne. La dose précise n'est pas affichée tant que l'humidité du sol n'est pas confirmée.
+    <cite>Exemple de carte quand la donnée est faible</cite>
+  </div>
+</section>
+
+<!-- 04 -->
+<section class="block page-break">
+  <span class="eyebrow blue">04 · Système</span>
+  <h2>Architecture</h2>
+  <p>Un site Next.js sert l'agriculteur et le conseiller. Une API FastAPI porte le pipeline. PostgreSQL avec PostGIS garde les polygones. Redis file le travail du jour. La page et les notifications parlent à l'API. Aucun des deux n'invente une dose.</p>
+  <div class="flow">
+    <div class="step"><span class="n">1</span><span class="t">Entrées</span><p>Carte Leaflet, formulaire, notification ou Telegram.</p></div>
+    <div class="step"><span class="n">2</span><span class="t">Orchestrateur</span><p>Charge la parcelle et appelle les agents dans l'ordre.</p></div>
+    <div class="step"><span class="n">3</span><span class="t">Calcul</span><p>Météo, satellite, bilan, risque, validateur.</p></div>
+    <div class="step"><span class="n">4</span><span class="t">Sortie</span><p>Texte en trois langues, carte, liste de visites.</p></div>
+  </div>
+  <h3>Les agents</h3>
+  <p>Chaque agent a une entrée, une sortie, et un siège. L'orchestrateur les appelle dans l'ordre. Aucun agent n'invente une dose.</p>
+  <table>
+    <thead><tr><th>Agent</th><th>Rôle</th><th>Siège</th></tr></thead>
+    <tbody>
+      <tr><td>Orchestrateur</td><td>Charge le profil, enchaîne les appels, enregistre ce qui manque.</td><td>Backend</td></tr>
+      <tr><td>Météo</td><td>Température, humidité, vent, pluie et rayonnement Open-Meteo, avec l'heure de la requête.</td><td>Agronomie</td></tr>
+      <tr><td>Satellite</td><td>Sentinel-2, masque nuageux, NDVI, NDWI, date, part de pixels valides, image de vigueur. Sentinel-1 si l'optique est trop nuageuse.</td><td>Satellite</td></tr>
+      <tr><td>Agronome</td><td>ET0 Penman-Monteith, ETc, bilan racinaire, risque fongique, volume de bouillie, blocage vent.</td><td>Agronomie</td></tr>
+      <tr><td>Validateur</td><td>Unités, fraîcheur, stade, méthode. Il peut empêcher l'affichage d'une dose précise.</td><td>Backend</td></tr>
+      <tr><td>Explication</td><td>Darija, français, arabe, à partir du JSON et de pages FAO et INRA, via Ollama en local. Ask Qatra sur le site et depuis Telegram.</td><td>Explication</td></tr>
+      <tr><td>Interface</td><td>Carte Leaflet, écrans, notifications site ou Telegram, note vocale (Piper / Web Speech). Le texte part toujours avec l'audio.</td><td>Interface</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">Si le modèle de langage est indisponible, un modèle de phrase écrit en code remplit les trois langues. La démonstration doit tenir avec le réseau du modèle coupé.</p>
+</section>
+
+<!-- 05 -->
+<section class="block chapter">
+  <span class="eyebrow">05 · Pipeline</span>
+  <h2>La journée d'une parcelle</h2>
+  <ol>
+    <li>Le travailleur charge chaque parcelle active. Un appel <span class="mono">POST /plots/{id}/recommendation</span> lance le même chemin pour une seule parcelle.</li>
+    <li>La météo et le satellite écrivent leurs observations. Chaque valeur garde sa source, son heure, ses unités et sa qualité. Une image absente reste nulle.</li>
+    <li>L'agronomie calcule ET0, ETc, le déficit, la dose brute, l'alerte et la décision de pulvérisation.</li>
+    <li>Le validateur pose <span class="mono">show_dose</span> ou <span class="mono">needs_check</span>, et autorise ou bloque la pulvérisation.</li>
+    <li>L'explication écrit les trois textes. L'interface ajoute la note vocale.</li>
+    <li>La ligne est stockée. Une notification part seulement si la consigne a changé et si l'agriculteur a accepté les messages.</li>
+  </ol>
+  <h3>Tests qui doivent passer</h3>
+  <ul>
+    <li>ET0 = 4,2 mm et Kc = 0,75 donnent ETc = 3,15 mm.</li>
+    <li>Les mêmes entrées rejouent la même sortie.</li>
+    <li>Un NDVI manquant force <span class="mono">needs_check</span>.</li>
+    <li>Une scène de plus de 10 jours force <span class="mono">needs_check</span>.</li>
+    <li>Un vent de 16 km/h met <span class="mono">spray_blocked</span> à vrai.</li>
+  </ul>
+  <div class="callout">
+    <div class="lab">Note agronomique</div>
+    Le risque de maladie de la première version s'appelle <span class="mono">fungal_risk</span>. Mildiou et oïdium sont des maladies de la vigne et des légumes. Ils ne sont pas les étiquettes des agrumes tant qu'un agronome n'a pas nommé la maladie de la culture.
+  </div>
+</section>
+
+<!-- 06 -->
+<section class="block page-break">
+  <span class="eyebrow blue">06 · Données</span>
+  <h2>Sources et contrat</h2>
+  <p>Quatre familles de données. Rien n'est inventé pour combler un trou.</p>
+  <table>
+    <thead><tr><th>Famille</th><th>Source</th><th>Usage</th></tr></thead>
+    <tbody>
+      <tr><td>Météo</td><td>Open-Meteo. La Direction de la météorologie nationale si l'accès s'ouvre.</td><td>ET0, pluie passée, pluie prévue, vent.</td></tr>
+      <tr><td>Satellite</td><td>Sentinel-2 et Sentinel-1, via Copernicus Data Space (Earth Engine si éligible). FAO WaPOR plus tard.</td><td>Couvert, date, qualité.</td></tr>
+      <tr><td>Parcelle</td><td>Ce que l'agriculteur déclare.</td><td>Culture, stade, polygone, système, irrigations, notes de sol.</td></tr>
+      <tr><td>Agronomie</td><td>FAO-56, INRA, bulletins publics du ministère pour l'explication.</td><td>Le calcul. Les bulletins ne remplacent pas la formule.</td></tr>
+    </tbody>
+  </table>
+  <p>Le fichier <span class="mono">docs/contract.json</span> est la forme commune. Extrait du jour d'exemple, parcelle <span class="mono">MA-001</span> :</p>
+  <pre>{
+  "plot_id": "MA-001", "crop": "citrus", "stage": "fruit_growth",
+  "area_ha": 1.2, "irrigation_method": "drip",
+  "et0_mm_day": 4.2, "et0_source": "penman_monteith", "kc": 0.75, "etc_mm": 3.15,
+  "effective_rain_mm": 1.5, "gross_irrigation_mm": 4.7,
+  "ndvi": 0.68, "ndvi_observed_at": "2026-10-11", "valid_pixel_pct": 86,
+  "wind_kmh": 9, "spray_blocked": false, "disease_risk": "low",
+  "status": "show_dose", "reasons": ["fruit_growth", "rain_reduces_need"],
+  "engine_version": "0.1.0"
+}</pre>
+</section>
+
+<!-- 07 -->
+<section class="block chapter">
+  <span class="eyebrow">07 · Stack</span>
+  <h2>Technologies</h2>
+  <table>
+    <thead><tr><th>Pièce</th><th>Choix</th><th>Coût / note</th></tr></thead>
+    <tbody>
+      <tr><td>Cartographie</td><td>Leaflet + OpenStreetMap</td><td>Gratuit. Afficher la carte et dessiner les limites des parcelles. Remplace Mapbox.</td></tr>
+      <tr><td>Images satellitaires</td><td>Sentinel-1 / Sentinel-2 via Copernicus Data Space</td><td>Gratuit sous conditions. Google Earth Engine possible pour usages éligibles (recherche non commerciale).</td></tr>
+      <tr><td>API conversationnelle</td><td>Ollama, modèle open source en local</td><td>Sans frais d'API. Dépend des capacités matérielles de la machine.</td></tr>
+      <tr><td>Synthèse vocale</td><td>Piper ou Web Speech API</td><td>Gratuit en local. Tester la qualité des voix avant de trancher pour la darija.</td></tr>
+      <tr><td>Notifications</td><td>Notifications du site, ou Telegram Bot</td><td>Alternative gratuite à WhatsApp Cloud API, qui peut entraîner des coûts.</td></tr>
+      <tr><td>Site</td><td>Next.js, TypeScript, Leaflet</td><td>Un seul site, téléphone et ordinateur.</td></tr>
+      <tr><td>API</td><td>Python, FastAPI</td><td>Orchestrateur, moteur, validateur, explication. Routes sous <span class="mono">/api/v1</span>.</td></tr>
+      <tr><td>Données</td><td>PostgreSQL, PostGIS, Redis</td><td>Polygones et surface. Redis file le travail quotidien.</td></tr>
+      <tr><td>Comptes</td><td>JWT, bcrypt</td><td>Agriculteur et conseiller. Auth publique limitée.</td></tr>
+      <tr><td>Météo</td><td>Open-Meteo</td><td>Prévision de base sans clé.</td></tr>
+      <tr><td>Exécution</td><td>Docker Compose, GitHub Actions</td><td>API, PostGIS, Redis. Puis Prometheus et Grafana.</td></tr>
+    </tbody>
+  </table>
+  <h3>API</h3>
+  <table>
+    <thead><tr><th>Méthode</th><th>Chemin</th><th>Rôle</th></tr></thead>
+    <tbody>
+      <tr><td>POST</td><td class="mono">/api/v1/auth/register</td><td>Créer un compte, rendre un JWT</td></tr>
+      <tr><td>POST</td><td class="mono">/api/v1/auth/login</td><td>Rendre un JWT</td></tr>
+      <tr><td>POST</td><td class="mono">/api/v1/plots</td><td>Créer une parcelle depuis un GeoJSON</td></tr>
+      <tr><td>GET</td><td class="mono">/api/v1/plots</td><td>Lister les parcelles de l'appelant</td></tr>
+      <tr><td>POST</td><td class="mono">/api/v1/plots/{id}/recommendation</td><td>Lancer le pipeline et stocker une ligne</td></tr>
+      <tr><td>GET</td><td class="mono">/api/v1/plots/{id}/recommendations</td><td>Historique</td></tr>
+      <tr><td>POST</td><td class="mono">/api/v1/plots/{id}/ask</td><td>Répondre depuis la dernière ligne</td></tr>
+      <tr><td>GET</td><td class="mono">/api/v1/advisor/plots</td><td>Parcelles liées, statut, stade, déficit, total de saison</td></tr>
+      <tr><td>POST</td><td class="mono">/api/v1/telegram/webhook</td><td>Question entrante (Telegram), vers Ask Qatra</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 08 + 09 -->
+<section class="block page-break">
+  <span class="eyebrow blue">08 · Produit</span>
+  <h2>Écrans</h2>
+  <div class="grid2">
+    <article class="card"><div class="t">Agriculteur</div><p>Carte du Maroc et ses parcelles. Formulaire. Carte de résultat : statut, raisons, ETc, heures des données, pulvérisation, trois langues, image de vigueur. Ask Qatra.</p></article>
+    <article class="card blue"><div class="t">Conseiller</div><p>Carte colorée par statut. Liste de visites : stade sensible d'abord, puis déficit le plus haut. Bilan de saison : pluie, eau conseillée, besoin estimé.</p></article>
+  </div>
+  <p>Le site ou Telegram reprend le texte validé quand la consigne change. La note vocale s'ajoute si Piper ou Web Speech renvoie un fichier.</p>
+
+  <span class="eyebrow" style="margin-top: 5mm;">09 · Organisation</span>
+  <h2>Cinq sièges, huit semaines</h2>
+  <p>Cinq personnes, cinq sièges. Un dépôt, une branche par personne, une relecture par un coéquipier. Le lundi fixe le but. Le vendredi, chacun montre son travail sur <span class="mono">MA-001</span>.</p>
+  <table>
+    <thead><tr><th>Siège</th><th>Construit</th></tr></thead>
+    <tbody>
+      <tr><td>Backend</td><td>Comptes, PostGIS, API, orchestrateur, validateur, Docker Compose.</td></tr>
+      <tr><td>Satellite</td><td>Copernicus Data Space, NDVI, NDWI, masque nuageux, repli Sentinel-1, images de vigueur.</td></tr>
+      <tr><td>Agronomie</td><td>Open-Meteo, Penman-Monteith, bilan, règles de risque, volume de bouillie, tests.</td></tr>
+      <tr><td>Interface</td><td>Leaflet, tableaux de bord, notifications / Telegram, voix darija (Piper / Web Speech).</td></tr>
+      <tr><td>Explication</td><td>Textes, Ask Qatra, Ollama en local, test du chemin quotidien, GitHub Actions.</td></tr>
+    </tbody>
+  </table>
+  <table>
+    <thead><tr><th>Semaine</th><th>Preuve</th></tr></thead>
+    <tbody>
+      <tr><td>1 · Contrat</td><td>Compose, parcelle exemple, test 3,15 mm, carte Leaflet, darija et français.</td></tr>
+      <tr><td>2 · Comptes</td><td>Inscription, polygone réel, météo live, NDVI et NDWI, trois langues.</td></tr>
+      <tr><td>3 · Bilan</td><td>Orchestrateur, masque nuageux, zone racinaire, formulaire aligné.</td></tr>
+      <tr><td>4 · Une parcelle</td><td>Validateur sur MA-001, image de vigueur, heures séparées.</td></tr>
+      <tr><td>5 · Carte agriculteur</td><td>Historique, volume de bouillie, Ask Qatra.</td></tr>
+      <tr><td>6 · Conseiller</td><td>Liste conseiller, travail satellite, floraison, notification ou Telegram.</td></tr>
+      <tr><td>7 · Messages</td><td>Parcelles privées, blocage vent, note vocale.</td></tr>
+      <tr><td>8 · Soutenance</td><td>README, tests verts, démo téléphone et conseiller.</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">Dépôt : github.com/AmineElAtrache/Qatra · Secrets dans <span class="mono">.env</span>, jamais dans git.</p>
+</section>
+
+<!-- 10 -->
+<section class="block chapter">
+  <span class="eyebrow blue">10 · Benchmark</span>
+  <h2>Ce qui existe déjà</h2>
+  <p>Qatra n'est pas la première aide à l'irrigation. Les chiffres d'économie d'eau cités plus bas sont ceux publiés par ces produits. Ils ne sont pas des résultats de Qatra.</p>
+
+  <h3>Bulletin d'un ORMVA</h3>
+  <p>Le conseil public de la plaine. Légitime, et le même pour beaucoup de parcelles. Il ne dessine pas un polygone et n'explique pas pourquoi deux voisins devraient agir différemment cette semaine.</p>
+
+  <h3>FAO CROPWAT</h3>
+  <p>Le logiciel de référence de la FAO pour FAO-56. C'est la famille de calcul que Qatra reprend. CROPWAT est un outil de bureau pour un technicien, pas une carte de téléphone ni un message en darija.</p>
+
+  <h3>SOWIT / SOWATER</h3>
+  <p>Produit marocain déjà en service. SOWATER donne un conseil du jour et un calendrier sur plusieurs jours à partir de la culture, d'un indice de végétation et de la météo. SOWIT indique qu'une étude USAID WE4F a mesuré, chez des clients, une économie d'eau d'environ 20 à 25 %. C'est le produit le plus proche, avec l'avance du terrain. Qatra ne reprend pas ce pourcentage.</p>
+
+  <h3>IrriWatch</h3>
+  <p>Service commercial. Conseil quotidien à partir du satellite thermique, humidité du sol estimée à environ 10 m, plan sur plusieurs jours. En avance dès que la question est « combien d'eau reste dans le sol ». Abonnement commercial, pas un moteur ouvert de cours.</p>
+
+  <table class="compare">
+    <thead>
+      <tr><th>Solution</th><th>Échelle</th><th>Capteur</th><th>Méthode</th><th>Preuve</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Bulletin ORMVA</td><td>Plaine</td><td>Non</td><td>Conseil régional</td><td>Pratique officielle</td></tr>
+      <tr><td>CROPWAT</td><td>Calcul culture</td><td>Non</td><td>FAO-56</td><td>Référence FAO</td></tr>
+      <tr><td>SOWATER</td><td>Parcelle</td><td>Optionnel</td><td>Satellite, météo, culture</td><td>Fermes, étude WE4F citée par SOWIT</td></tr>
+      <tr><td>IrriWatch</td><td>Pixel ~10 m</td><td>Non</td><td>Thermique et bilan</td><td>Produit commercial quotidien</td></tr>
+      <tr><td>Qatra</td><td>Parcelle dessinée</td><td>Non pour commencer</td><td>FAO-56, NDVI, validateur</td><td>Prototype de cours</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 11 -->
+<section class="block page-break keep">
+  <span class="eyebrow">11 · Positionnement</span>
+  <h2>Où Qatra est le meilleur choix</h2>
+  <p>Qatra est le meilleur choix pour expliquer, en darija, en français et en arabe, le besoin en eau d'une parcelle d'agrumes que l'on vient de dessiner, sans capteur, avec un chiffre rejouable, et le même chiffre sur la carte du conseiller.</p>
+  <div class="grid2">
+    <article class="card"><div class="t">Mieux que le bulletin</div><p>La consigne change avec le stade, la pluie de ce point et la date de l'image.</p></article>
+    <article class="card blue"><div class="t">Mieux que CROPWAT seul</div><p>Le calcul FAO-56 arrive sur un téléphone, avec la qualité de la donnée et une liste de visites.</p></article>
+    <article class="card blue"><div class="t">Plus lisible qu'un NDVI brut</div><p>L'indice ne conclut pas seul. Le validateur peut cacher la dose.</p></article>
+    <article class="card"><div class="t">Ouvert pour le cours</div><p>Données publiques, moteur Python, contrat JSON, cinq modules défendables.</p></article>
+  </div>
+  <p>Qatra n'est pas en avance sur SOWATER pour l'usage réel, ni sur IrriWatch pour l'humidité thermique. C'est un prototype. Il devient crédible quand un agronome a relu les coefficients, puis quand une saison permet de comparer la dose conseillée à l'eau réellement apportée.</p>
+  <div class="quote">
+    Le résultat est une aide à la décision. L'agriculteur vérifie encore le sol avant de changer un tour d'eau réel. Aucune économie d'eau et aucun gain de rendement ne sont annoncés tant qu'un pilote ne les a pas mesurés.
+    <cite>Limite à dire à la soutenance</cite>
+  </div>
+</section>
+
+<!-- 12 -->
+<section class="block page-break keep">
+  <span class="eyebrow blue">12 · Références</span>
+  <h2>Sources</h2>
+  <ol class="sources">
+    <li>Allen, R. G., Pereira, L. S., Raes, D., Smith, M. <em>Crop evapotranspiration</em>. FAO Irrigation and Drainage Paper 56, 1998.</li>
+    <li>FAO. CROPWAT. fao.org/land-water/databases-and-software/cropwat</li>
+    <li>SOWIT. SOWATER. sowit.fr/pilotage-de-lirrigation</li>
+    <li>FreshPlaza. Entretien SOWIT / étude USAID WE4F, 20 à 25 % cités. Article 9517088.</li>
+    <li>IrriWatch. Brochure « The root of effective irrigation ».</li>
+    <li>Open-Meteo, Copernicus Sentinel-2 / Sentinel-1, FAO WaPOR.</li>
+  </ol>
+  <p class="muted">Document de projet, octobre 2026. Les valeurs 4,2 mm, 0,75 et 3,15 mm sont un exemple de test.</p>
+</section>
+
+</body>
+</html>
