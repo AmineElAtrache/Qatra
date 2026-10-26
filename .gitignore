@@ -14,9 +14,17 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.pytest_cache/
+*.egg-info/
 
 # Node
 node_modules/
 .next/
 dist/
 out/
+npm-debug.log*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+*.log
