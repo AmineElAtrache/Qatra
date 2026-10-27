@@ -15,3 +15,5 @@ redis>=5.2.0
 pytest>=8.3.0
 python-multipart>=0.0.20
 shapely>=2.0.6
+# Optional at runtime, required only for the live Earth Engine adapter.
+earthengine-api>=1.6.0
