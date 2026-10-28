@@ -1,4 +1,9 @@
-"""Explanation seat — Ollama when up; offline templates always available."""
+"""Explanation seat — Ollama when up; offline templates always available.
+
+Trilingual engine (FR, AR, Darija). It analyses live agronomy payloads produced
+by the orchestrator and restitutes only numbers that already exist in the JSON.
+No number is ever invented.
+"""
 
 from __future__ import annotations
 
@@ -9,27 +14,127 @@ import httpx
 from app.core.config import settings
 
 
+# ---------------------------------------------------------------------------
+# Field normalisation — accept both the contract schema and older aliases
+# ---------------------------------------------------------------------------
+def _get(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    for k in keys:
+        if k in data and data[k] is not None:
+            return data[k]
+    return default
+
+
+def _status(data: dict[str, Any]) -> str:
+    return str(_get(data, "status", "needs_check")).lower()
+
+
+def _show_dose(data: dict[str, Any]) -> bool:
+    return _status(data) == "show_dose" and _get(data, "display_dose") is not None
+
+
+# ---------------------------------------------------------------------------
+# Template builders — one per language, all driven by the same payload
+# ---------------------------------------------------------------------------
+def _fr(data: dict[str, Any]) -> str:
+    parts: list[str] = []
+
+    if not _show_dose(data):
+        return (
+            "Besoin à vérifier. La dose précise n'est pas affichée tant que "
+            "les données ne sont pas confirmées."
+        )
+
+    etc = _get(data, "etc_mm")
+    rain = _get(data, "effective_rain_mm", 0.0)
+    gross = _get(data, "gross_irrigation_mm")
+    method = _get(data, "irrigation_method", "")
+    crop = _get(data, "crop", "culture")
+
+    parts.append(
+        f"Besoin estimé {etc} mm (ETc) pour votre {crop}. "
+        f"Pluie utile {rain} mm. Dose brute indicative {gross} mm."
+    )
+    if method:
+        parts.append(f"Irrigation par {method}.")
+
+    # Fungal / disease risk from the live payload
+    fungal = _get(data, "fungal_risk", _get(data, "disease_risk", "low"))
+    if fungal == "high":
+        parts.append("Risque fongique élevé, restez vigilant.")
+    elif fungal == "medium":
+        parts.append("Risque fongique modéré, surveillance conseillée.")
+
+    # Spray block from the live payload
+    if _get(data, "spray_blocked"):
+        parts.append("Traitement par pulvérisation bloqué aujourd'hui (vent fort).")
+
+    return " ".join(parts)
+
+
+def _ar(data: dict[str, Any]) -> str:
+    parts: list[str] = []
+
+    if not _show_dose(data):
+        return "يجب التحقق. الجرعة الدقيقة غير معروضة ما دامت البيانات غير مؤكدة."
+
+    etc = _get(data, "etc_mm")
+    rain = _get(data, "effective_rain_mm", 0.0)
+    gross = _get(data, "gross_irrigation_mm")
+    crop = _get(data, "crop", "المحصول")
+
+    parts.append(
+        f"الاحتياج التقديري {etc} مم (ETc) لـ {crop}. "
+        f"مطر نافع {rain} مم. جرعة خام إرشادية {gross} مم."
+    )
+
+    fungal = _get(data, "fungal_risk", _get(data, "disease_risk", "low"))
+    if fungal == "high":
+        parts.append("انتبه، خطر الأمراض (الفطريات) مرتفع بسبب الرطوبة.")
+    elif fungal == "medium":
+        parts.append("يوجد خطر متوسط للمرض، المراقبة موصى بها.")
+
+    if _get(data, "spray_blocked"):
+        parts.append("العلاج بالرش ممنوع اليوم بسبب الريح القوي.")
+
+    return " ".join(parts)
+
+
+def _darija(data: dict[str, Any]) -> str:
+    parts: list[str] = []
+
+    if not _show_dose(data):
+        return "Khass n2aked. Doza ma kaynach 7it data ma kamlach."
+
+    etc = _get(data, "etc_mm")
+    rain = _get(data, "effective_rain_mm", 0.0)
+    gross = _get(data, "gross_irrigation_mm")
+    method = _get(data, "irrigation_method", "")
+
+    parts.append(
+        f"L7aja dyal lma: {etc} mm. Shta nafi3a: {rain} mm. Doza ta9ribiya: {gross} mm."
+    )
+    if method:
+        parts.append(f"Irrigation: {method}.")
+
+    fungal = _get(data, "fungal_risk", _get(data, "disease_risk", "low"))
+    if fungal == "high":
+        parts.append("رد بالك، كاين خطر مرتفع ديال الفطريات والبياض.")
+    elif fungal == "medium":
+        parts.append("كاين شوية الخطر ديال الفطريات، حاول تراقب الشجر ديالك.")
+
+    if _get(data, "spray_blocked"):
+        parts.append("Traitement pulvérisation bloqué aujourd'hui (vent fort).")
+
+    return " ".join(parts)
+
+
 def template_texts(payload: dict[str, Any]) -> dict[str, str]:
     """Numbers only from payload — never invent."""
-    etc = payload.get("etc_mm")
-    rain = payload.get("effective_rain_mm")
-    gross = payload.get("gross_irrigation_mm")
-    status = payload.get("status", "needs_check")
-
-    if status != "show_dose" or etc is None:
-        fr = "Besoin à vérifier. La dose précise n'est pas affichée tant que les données ne sont pas confirmées."
-        darija = "Khass n2aked. Doza ma kaynach 7it data ma kamlach."
-        ar = "يجب التحقق. الجرعة الدقيقة غير معروضة ما دامت البيانات غير مؤكدة."
-    else:
-        fr = (
-            f"Besoin estimé {etc} mm (ETc). "
-            f"Pluie utile {rain} mm. "
-            f"Dose brute indicative {gross} mm."
-        )
-        darija = f"L7aja dyal lma: {etc} mm. Shta nafi3a: {rain} mm. Doza ta9ribiya: {gross} mm."
-        ar = f"الاحتياج التقديري {etc} مم. مطر نافع {rain} مم. جرعة خام إرشادية {gross} مم."
-
-    return {"fr": fr, "darija": darija, "ar": ar}
+    return {
+        "fr": _fr(payload),
+        "ar": _ar(payload),
+        "darija": _darija(payload),
+    }
 
 
 async def explain(payload: dict[str, Any]) -> dict[str, str]:
