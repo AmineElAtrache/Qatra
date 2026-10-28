@@ -189,7 +189,65 @@ async def explain(payload: dict[str, Any]) -> dict[str, str]:
 
 
 async def ask_qatra(question: str, last_payload: dict[str, Any]) -> dict[str, str]:
-    """Answer from last recommendation only (+ knowledge folder later)."""
+    """Answer a farmer question from the last recommendation + FAO/INRA folder.
+
+    The answer is built from the stored payload and the reference pages; the
+    language model is only consulted when available and never invents a number.
+    """
     base = await explain(last_payload)
-    base["note"] = f"Ask Qatra (MVP): answered from stored recommendation. Q={question[:200]}"
+    context = _build_ask_context(question, last_payload)
+    base["answer"] = context
+    base["note"] = (
+        f"Ask Qatra (MVP): answered from stored recommendation + knowledge folder. "
+        f"Q={question[:200]}"
+    )
     return base
+
+
+def _build_ask_context(question: str, payload: dict[str, Any]) -> str:
+    """Ground the answer in the payload and the knowledge reference pages."""
+    q = (question or "").lower()
+    refs = _relevant_reference(q)
+    ref_blob = "\n".join(f"- {p.name}" for p in refs) or "(no matching reference page)"
+
+    if "irrig" in q or "eau" in q or "water" in q or "lma" in q or "سقي" in q:
+        return (
+            f"Besoin estimé {_get(payload, 'etc_mm')} mm (ETc), "
+            f"pluie utile {_get(payload, 'effective_rain_mm', 0.0)} mm, "
+            f"dose brute {_get(payload, 'gross_irrigation_mm')} mm "
+            f"(method: {_get(payload, 'irrigation_method', 'n/a')}). "
+            f"Reference: {ref_blob}"
+        )
+    if "risque" in q or "maladie" in q or "fongique" in q or "fong" in q or " disease" in q or "مرض" in q or "خاطر" in q:
+        return (
+            f"Risque: {_get(payload, 'fungal_risk', _get(payload, 'disease_risk', 'low'))}. "
+            f"Reference: {ref_blob}"
+        )
+    if "vent" in q or "spray" in q or "رش" in q:
+        blocked = _get(payload, "spray_blocked", False)
+        return (
+            f"Spray blocked={blocked} (wind {_get(payload, 'wind_kmh', 'n/a')} km/h). "
+            f"Reference: {ref_blob}"
+        )
+    # Generic fallback: state the stored recommendation.
+    return (
+        f"From the last recommendation (status={_get(payload, 'status', 'needs_check')}): "
+        f"ETc {_get(payload, 'etc_mm')} mm, dose {_get(payload, 'gross_irrigation_mm')} mm. "
+        f"Reference: {ref_blob}"
+    )
+
+
+def _relevant_reference(question: str) -> list[Path]:
+    """Return knowledge pages that mention a token from the question."""
+    q = (question or "").lower()
+    tokens = [t for t in q.split() if len(t) > 3]
+    matches: list[Path] = []
+    for p in list_reference_pages():
+        try:
+            text = p.read_text(encoding="utf-8").lower()
+        except Exception:
+            continue
+        name = p.name.lower()
+        if any(tok in text or tok in name for tok in tokens):
+            matches.append(p)
+    return matches
