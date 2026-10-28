@@ -69,3 +69,8 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+
+features/MVP/
+my-mvp-features-task.md
+features-plan-team.md

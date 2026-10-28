@@ -1,0 +1,1 @@
+`feat(explanation)` | Configuration du dossier de référence FAO/INRA et moteur de templates de secours hors-ligne
