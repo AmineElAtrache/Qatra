@@ -4,7 +4,7 @@ Five equal seats. One repo. One branch per person. Merge through pull requests.
 
 | Seat | Branch | Owns (primary) | Touch only with review |
 | --- | --- | --- | --- |
-| **Backend** | `seat/backend` | `backend/app/core/`, `backend/app/api/`, `backend/app/domain/`, `orchestrator.py`, `validator.py`, `docker-compose.yml`, Alembic | shared contract |
+| **Backend** | `seat/backend` | `backend/app/core/`, `backend/app/api/`, `backend/app/domain/`, `orchestrator.py`, `validator.py`, `workers/daily.py`, `docker-compose.yml`, Alembic | shared contract |
 | **Satellite** | `seat/satellite` | `backend/app/services/satellite_service.py`, satellite fixtures | orchestrator call site |
 | **Agronomy** | `seat/agronomy` | `weather_service.py`, `agronomy_service.py`, `tests/test_engine.py` | validator rules |
 | **Interface** | `seat/interface` | entire `web/`, `notification.py`, `api/v1/telegram.py` | API response shapes |

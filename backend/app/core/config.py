@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     gee_project_id: str = ""
     gee_credentials_path: str = ""
     satellite_overlay_dir: str = "artifacts/satellite"
+    # When true and GEE has no usable scene, use an explicit demo optical sample
+    # (never invents numbers in production — for local MVP demos only).
+    satellite_demo_fallback: bool = False
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
     knowledge_dir: str = "knowledge"

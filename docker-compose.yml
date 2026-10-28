@@ -1,6 +1,9 @@
 services:
   db:
-    image: postgis/postgis:16-3.4
+    # Default: postgres:16-alpine (cached locally). For real PostGIS:
+    #   POSTGRES_IMAGE=postgis/postgis:16-3.4 docker compose up -d db
+    # Geom is stored as GeoJSON text so both images work for MVP.
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
       POSTGRES_USER: qatra
       POSTGRES_PASSWORD: qatra
@@ -9,6 +12,7 @@ services:
       - "5432:5432"
     volumes:
       - qatra_pg:/var/lib/postgresql/data
+      - ./backend/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U qatra -d qatra"]
       interval: 5s
@@ -46,6 +50,26 @@ services:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
+  worker:
+    build:
+      context: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://qatra:qatra@db:5432/qatra
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+      - ./docs:/docs:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m app.workers.daily --loop --sleep 30
+    profiles: ["worker"]
+
   prometheus:
     image: prom/prometheus:v2.55.1
     ports:
@@ -55,6 +79,7 @@ services:
       - qatra_prometheus:/prometheus
     depends_on:
       - api
+    profiles: ["monitoring"]
 
   grafana:
     image: grafana/grafana:11.4.0
@@ -70,6 +95,7 @@ services:
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+    profiles: ["monitoring"]
 
   web:
     build:

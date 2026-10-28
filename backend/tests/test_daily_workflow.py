@@ -10,6 +10,7 @@ from app.services.weather_service import WeatherObservation
 
 def test_daily_recommendation_pipeline(monkeypatch):
     async def fake_weather(lat, lon):
+        assert lat is not None and lon is not None
         return WeatherObservation(
             temperature_c=28.0,
             humidity_pct=45.0,
@@ -22,7 +23,8 @@ def test_daily_recommendation_pipeline(monkeypatch):
             quality="test",
         )
 
-    async def fake_satellite(bbox=None):
+    async def fake_satellite(*args, **kwargs):
+        assert "geojson" in kwargs or args
         return SatelliteObservation(
             ndvi=0.68,
             ndwi=0.21,
@@ -46,6 +48,22 @@ def test_daily_recommendation_pipeline(monkeypatch):
             stage="fruit_growth",
             irrigation_method="drip",
             area_ha=1.2,
+            geojson={
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [-7.5898, 33.5731],
+                            [-7.5888, 33.5731],
+                            [-7.5888, 33.5740],
+                            [-7.5898, 33.5740],
+                            [-7.5898, 33.5731],
+                        ]
+                    ],
+                },
+            },
         )
     )
 
@@ -53,3 +71,5 @@ def test_daily_recommendation_pipeline(monkeypatch):
     assert result["etc_mm"] == 3.15
     assert result["display_dose"] == result["gross_irrigation_mm"]
     assert result["texts"]["fr"] == "Recommendation ready"
+    assert result["lat"] is not None
+    assert result["lon"] is not None

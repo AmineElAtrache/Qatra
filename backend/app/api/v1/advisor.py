@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_farmer
+from app.api.deps import require_advisor
 from app.core.database import get_db
 from app.domain.models import Farmer, Plot, Recommendation
 
@@ -11,10 +11,9 @@ router = APIRouter()
 @router.get("/plots")
 def advisor_plots(
     db: Session = Depends(get_db),
-    farmer: Farmer = Depends(get_current_farmer),
+    advisor: Farmer = Depends(require_advisor),
 ) -> list[dict]:
-    if farmer.role != "advisor":
-        raise HTTPException(status_code=403, detail="Advisor role required")
+    _ = advisor
     # MVP: advisor sees all plots (link table comes later)
     plots = db.query(Plot).all()
     out: list[dict] = []

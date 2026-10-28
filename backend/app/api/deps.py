@@ -8,6 +8,8 @@ from app.domain.models import Farmer
 
 bearer = HTTPBearer(auto_error=False)
 
+ALLOWED_ROLES = frozenset({"farmer", "advisor"})
+
 
 def get_current_farmer(
     creds: HTTPAuthorizationCredentials | None = Depends(bearer),
@@ -21,4 +23,12 @@ def get_current_farmer(
     farmer = db.get(Farmer, int(payload["sub"]))
     if not farmer:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if farmer.role not in ALLOWED_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid role")
     return farmer
+
+
+def require_advisor(user: Farmer = Depends(get_current_farmer)) -> Farmer:
+    if user.role != "advisor":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Advisor role required")
+    return user

@@ -1,27 +1,59 @@
-"""Load demo farmer + MA-001 when DB is up. Backend seat."""
+"""Load demo farmer + advisor + MA-001 when DB is up. Backend seat."""
 
 from app.core.database import Base, SessionLocal, engine
+from app.core.geo import default_ma001_geojson, geojson_to_text
 from app.core.security import hash_password
 from app.domain.models import Farmer, Plot
+
+
+def _ensure_user(
+    db,
+    *,
+    email: str,
+    password: str,
+    full_name: str,
+    role: str,
+) -> Farmer:
+    user = db.query(Farmer).filter(Farmer.email == email).first()
+    if user:
+        if user.role != role:
+            user.role = role
+            db.commit()
+            db.refresh(user)
+        return user
+    user = Farmer(
+        email=email,
+        password_hash=hash_password(password),
+        full_name=full_name,
+        role=role,
+        notify_opt_in=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def main() -> None:
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
-        farmer = db.query(Farmer).filter(Farmer.email == "demo@qatra.local").first()
-        if not farmer:
-            farmer = Farmer(
-                email="demo@qatra.local",
-                password_hash=hash_password("demo-demo"),
-                full_name="Demo Farmer",
-                role="farmer",
-                notify_opt_in=True,
-            )
-            db.add(farmer)
-            db.commit()
-            db.refresh(farmer)
+        farmer = _ensure_user(
+            db,
+            email="farmer@example.com",
+            password="demo-demo",
+            full_name="Demo Farmer",
+            role="farmer",
+        )
+        advisor = _ensure_user(
+            db,
+            email="advisor@example.com",
+            password="demo-demo",
+            full_name="Demo Advisor",
+            role="advisor",
+        )
 
+        geom_text = geojson_to_text(default_ma001_geojson())
         plot = db.query(Plot).filter(Plot.public_id == "MA-001").first()
         if not plot:
             plot = Plot(
@@ -31,11 +63,25 @@ def main() -> None:
                 stage="fruit_growth",
                 irrigation_method="drip",
                 area_ha=1.2,
-                geom="SRID=4326;POLYGON((-7.5898 33.5731, -7.5888 33.5731, -7.5888 33.5740, -7.5898 33.5740, -7.5898 33.5731))",
+                geom=geom_text,
             )
             db.add(plot)
             db.commit()
-        print("Seeded demo@qatra.local / demo-demo and plot MA-001")
+        else:
+            changed = False
+            if plot.owner_id != farmer.id:
+                plot.owner_id = farmer.id
+                changed = True
+            if not plot.geom:
+                plot.geom = geom_text
+                changed = True
+            if changed:
+                db.commit()
+
+        print("Roles ready:")
+        print(f"  farmer  {farmer.email} / demo-demo  (role={farmer.role})")
+        print(f"  advisor {advisor.email} / demo-demo  (role={advisor.role})")
+        print("Plot: MA-001 (GeoJSON stored)")
     finally:
         db.close()
 
