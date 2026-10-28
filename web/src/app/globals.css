@@ -1,0 +1,63 @@
+:root {
+  --navy: #0b1f3a;
+  --orange: #ff6b00;
+  --blue: #1b4f9c;
+  --muted: #64748b;
+  --bg: #f8fafc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+  color: var(--navy);
+  background: var(--bg);
+}
+
+a {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.brand {
+  font-weight: 800;
+  font-size: 1.5rem;
+  color: var(--navy);
+}
+
+.brand span {
+  color: var(--orange);
+}
+
+.nav {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 1rem 0 1.5rem;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-top: 3px solid var(--orange);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.leaflet-wrap {
+  height: 360px;
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  z-index: 0;
+}

@@ -1,5 +1,7 @@
 # Qatra
 
+Documentation de soutenance, en français : [docs/Qatra-Documentation.pdf](docs/Qatra-Documentation.pdf).
+
 Qatra is a precision-agriculture decision platform for citrus plots in Morocco.
 
 A farmer draws a plot. Each day the system produces three outputs for that plot:
@@ -8,7 +10,7 @@ A farmer draws a plot. Each day the system produces three outputs for that plot:
 2. **Canopy.** A Sentinel-2 reading (NDVI and NDWI), with the image date and a quality flag. If clouds hide the plot, a Sentinel-1 scene is recorded and confidence goes down.
 3. **Spray window.** A weather-based disease-risk alert, a spray volume from the plot area, and a block when the wind is too strong.
 
-The farmer reads this on a phone website and on WhatsApp, as text and as a Darija voice note. An advisor sees the same plots on a dashboard: vigor, who to visit, and the season’s water total.
+The farmer reads this on a phone website and via Telegram or a web notification, as text and as a Darija voice note. An advisor sees the same plots on a dashboard: vigor, who to visit, and the season’s water total.
 
 The language model explains numbers that code has already computed. It writes Darija, French, and Arabic. The dose, the index, and the spray rate stay in the agronomic code.
 
@@ -16,31 +18,31 @@ Five people build it, at the same level. Module M352, Advanced AI Engineering.
 
 ## Users
 
-**Farmer.** Registers, draws a plot, enters the citrus stage, irrigation method, last watering, and an optional spray product. Reads today’s card. Asks a question on the site or on WhatsApp. Receives a message when the instruction changes, if they opted in.
+**Farmer.** Registers, draws a plot, enters the citrus stage, irrigation method, last watering, and an optional spray product. Reads today’s card. Asks a question on the site or on Telegram. Receives a message when the instruction changes, if they opted in.
 
 **Advisor.** A cooperative or ORMVA adviser follows many plots: a vigor map, a visit list, and a season water total.
 
 ## Technologies
 
-| Piece | Choice | What it is for |
+| Piece | Choice | Cost / note |
 | --- | --- | --- |
-| Web | Next.js, TypeScript, Mapbox GL | One site for the phone and the laptop. The farmer draws the polygon in the browser. WhatsApp is the phone channel. |
+| Mapping | Leaflet + OpenStreetMap | Free. Map display and plot boundary drawing. Replaces Mapbox. |
+| Satellite imagery | Sentinel-1 / Sentinel-2 via Copernicus Data Space | Free under conditions. Google Earth Engine remains an option for eligible non-commercial research. |
+| Conversational API | Ollama, open-source model run locally | No API fees. Depends on the machine’s hardware. |
+| Speech | Piper or Web Speech API | Free locally. Test voice quality before choosing for Darija. |
+| Notifications | Built-in web notifications, or a Telegram Bot | Free alternative to WhatsApp Cloud API, which can incur costs. |
+| Web | Next.js, TypeScript, Leaflet | One site for the phone and the laptop. |
 | API | Python, FastAPI | Orchestrator, water balance, validator, explanation. All routes live under `/api/v1`. |
 | Database | PostgreSQL + PostGIS | Farmers, plot polygons, area, weather, satellite indices, recommendations. |
 | Queue | Redis | The daily job. |
 | Auth | JWT, bcrypt | Register and login. Farmer and advisor roles. Rate limit on the public auth routes. |
-| Weather | Open-Meteo | Temperature, humidity, wind, rain, solar radiation. The basic forecast needs no key. The service’s own ET0 is stored beside ours as a check. |
-| Evapotranspiration | FAO-56 Penman-Monteith | Reference evapotranspiration (ET0) computed from the weather inputs. |
+| Weather | Open-Meteo | Temperature, humidity, wind, rain, solar radiation. The basic forecast needs no key. |
+| Evapotranspiration | FAO-56 Penman-Monteith | Reference evapotranspiration (ET0) from the weather inputs. |
 | Crop water use | FAO-56 crop coefficient | `ETc = Kc × ET0`. Kc depends on the citrus stage. |
-| Optical satellite | Google Earth Engine, Sentinel-2 | Cloud mask, NDVI, NDWI, scene date, valid-pixel share, PNG vigor overlay. |
-| Radar fallback | Sentinel-1 | Used when valid optical pixels are under 70 percent. NDVI stays empty. Radar is a confidence flag, not a vegetation index. |
+| Radar fallback | Sentinel-1 | Used when valid optical pixels are under 70 percent. NDVI stays empty. |
 | Water productivity | FAO WaPOR | Later layer for evapotranspiration over Morocco. |
-| Soil | Farmer declaration, then HWSD | Soil notes the farmer enters. The Harmonized World Soil Database can fill a missing soil class later. |
 | Documents | FAO-56, INRA, public ministry bulletins | Pages the explanation can quote. They do not replace the formula. |
-| Language | One chat API | Called only from the explanation module. Darija, French, and Arabic. |
 | Retrieval | Small FAO and INRA folder | Ask Qatra answers from the validated result plus those pages. |
-| Speech | One speech API | Darija voice note. The text is always sent with the audio. |
-| Messaging | WhatsApp Cloud API | Outbound instruction and inbound questions. Twilio is the backup if Meta verification is slow. |
 | Containers | Docker Compose | API, PostGIS, and Redis on one command. |
 | Tests and deploy | GitHub Actions | The daily-workflow test on every pull request. |
 | Metrics | Prometheus and Grafana | After that test is green. |
@@ -51,9 +53,9 @@ Deep learning is a later stress model, after field labels exist. The first dose 
 
 ```mermaid
 flowchart TB
-  web[Mapbox web app]
+  web[Leaflet web app]
   advisor[Advisor pages]
-  waUser[WhatsApp]
+  tgUser[Telegram or web notify]
   api[FastAPI /api/v1]
   orch[Daily orchestrator]
   sat[Agent Satellite]
@@ -63,31 +65,31 @@ flowchart TB
   notif[Agent Interface]
   db[(PostGIS)]
   redis[(Redis)]
-  gee[Google Earth Engine]
+  cds[Copernicus Data Space]
   om[Open-Meteo]
-  meta[WhatsApp Cloud API]
-  llm[Language model]
+  tg[Telegram Bot]
+  llm[Ollama local]
   web --> api
   advisor --> api
-  waUser --> meta
-  meta --> api
+  tgUser --> tg
+  tg --> api
   api --> orch
   orch --> sat
   orch --> meteo
   orch --> agro
   agro --> explain
   explain --> notif
-  sat --> gee
+  sat --> cds
   meteo --> om
   explain --> llm
-  notif --> meta
+  notif --> tg
   orch --> db
   orch --> redis
 ```
 
-One FastAPI service. The page and WhatsApp both talk to that API. Redis queues the daily job. PostgreSQL with PostGIS stores farmers, polygons, weather, indices, and recommendations.
+One FastAPI service. The page and notifications both talk to that API. Redis queues the daily job. PostgreSQL with PostGIS stores farmers, polygons, weather, indices, and recommendations.
 
-If Earth Engine approval is late, the satellite client reads one downloaded scene, and the live path says the image is missing. The rest of the pipeline still runs.
+If Copernicus access is late, the satellite client reads one downloaded scene, and the live path says the image is missing. The rest of the pipeline still runs.
 
 ## Agents
 
@@ -115,9 +117,9 @@ flowchart LR
 
 **Validator.** Stands in front of anything the farmer can see. `show_dose` requires a known stage, a known irrigation method, ET0 newer than 48 hours, and a satellite scene no older than 10 days. Otherwise the status is `needs_check`. Spray text is withheld when the wind rule fails. The computed millimetres stay stored either way. Built by the Backend seat.
 
-**Agent Explication.** Writes Darija, French, and Arabic from the validated JSON and a small FAO and INRA folder. Ask Qatra on the web and from WhatsApp uses that same JSON. Every number in the text already exists in the result. If the model is down, a template fills the three languages from the JSON fields. Built by the Explanation seat.
+**Agent Explication.** Writes Darija, French, and Arabic from the validated JSON and a small FAO and INRA folder. Ask Qatra on the web and from Telegram uses that same JSON. Every number in the text already exists in the result. If the model is down, a template fills the three languages from the JSON fields. Built by the Explanation seat.
 
-**Agent Interface.** Sends the WhatsApp text and, when speech synthesis returns audio, a Darija voice note. The web card is the same text. Built by the Interface seat.
+**Agent Interface.** Sends the Telegram text and, when Piper or Web Speech returns audio, a Darija voice note. The web card is the same text. Built by the Interface seat.
 
 ## Daily workflow
 
@@ -132,7 +134,7 @@ flowchart TD
   text[Explanation in three languages]
   voice[Darija voice note]
   save[Store recommendation]
-  push[Web card and WhatsApp]
+  push[Web card and Telegram]
   cron --> wx --> et
   cron --> sat --> et
   et --> spray --> valid --> text --> voice --> save --> push
@@ -143,7 +145,7 @@ flowchart TD
 3. Agronomy computes ET0, ETc, the deficit, the gross irrigation, the risk alert, and the spray decision.
 4. The validator sets `show_dose` or `needs_check`, and allows or blocks the spray.
 5. Explication writes the three texts. Interface adds the voice note.
-6. The row is stored. The web card updates. WhatsApp sends when the instruction changed and the farmer opted in. An inbound WhatsApp question uses the same Ask Qatra path.
+6. The row is stored. The web card updates. A notification sends when the instruction changed and the farmer opted in. An inbound Telegram question uses the same Ask Qatra path.
 
 `POST /plots/{id}/recommendation` runs the same pipeline for one plot, so a demo does not wait for midnight.
 
@@ -175,7 +177,7 @@ A stress score sits beside the dose. Version one computes it from the NDVI chang
 
 ### What the farmer does
 
-1. Draws a polygon in Morocco and enters citrus, drip or surface, growth stage, last irrigation date, and a phone number if they want WhatsApp.
+1. Draws a polygon in Morocco and enters citrus, drip or surface, growth stage, last irrigation date, and a phone number if they want Telegram.
 2. The orchestrator loads the profile.
 3. Weather stores ET0 inputs, past rain, and forecast rain, with the request time.
 4. Satellite stores NDVI, NDWI, scene date, and valid-pixel percent, or a missing flag with a reason.
@@ -242,13 +244,13 @@ Example when the satellite scene is too old:
 | GET | `/api/v1/plots/{id}/recommendations` | Recommendation history |
 | POST | `/api/v1/plots/{id}/ask` | Answer from the latest row |
 | GET | `/api/v1/advisor/plots` | Linked plots: status, stage, deficit, satellite age, season total |
-| POST | `/api/v1/whatsapp/webhook` | Inbound WhatsApp events, routed to Ask Qatra |
+| POST | `/api/v1/telegram/webhook` | inbound Telegram events, routed to Ask Qatra |
 
 Farmers read their own plots. Advisors read plots linked to them.
 
 | Table | What it stores |
 | --- | --- |
-| `farmers` | Account, role, phone, WhatsApp opt-in |
+| `farmers` | Account, role, phone, notification opt-in |
 | `plots` | Polygon, area, crop, stage, irrigation method, advisor link |
 | `weather_observations` | Open-Meteo inputs, computed ET0, source, time |
 | `satellite_observations` | NDVI, NDWI, scene date, valid-pixel share, radar flag, overlay path |
@@ -258,7 +260,7 @@ Farmers read their own plots. Advisors read plots linked to them.
 
 A recommendation stores the engine version and the time of each input so the same inputs can be replayed.
 
-## Screens and WhatsApp
+## Screens and notifications
 
 Farmer site:
 
@@ -274,7 +276,7 @@ Advisor site:
 - Visit list: sensitive stage first (flowering, fruit growth), then highest deficit, with the satellite age.
 - Season balance: rain, water advised, estimated crop need.
 
-WhatsApp:
+Telegram / web notifications:
 
 - Opt-in on the form.
 - Outbound text is the validated explanation when the instruction changes.
@@ -283,42 +285,50 @@ WhatsApp:
 
 ## Repository
 
+How the team works in parallel: **[SEATS.md](SEATS.md)** · **[CONTRIBUTING.md](CONTRIBUTING.md)** · seat briefs in `docs/seats/`.
+
 ```text
 qatra/
+  SEATS.md
+  CONTRIBUTING.md
   docker-compose.yml
   .env.example
   Makefile
-  README.md
-  docs/contract.json
-  docs/assumptions.md
   .github/workflows/ci.yml
+  docs/
+    contract.json          # shared JSON — change only via PR
+    assumptions.md
+    samples/ma001.geojson
+    seats/{backend,satellite,agronomy,interface,explanation}.md
   backend/
     Dockerfile
+    requirements.txt
     alembic/
+    knowledge/{fao,inra}/
     app/main.py
-    app/core/config.py
-    app/core/database.py
-    app/core/security.py
-    app/api/v1/auth.py
-    app/api/v1/plots.py
-    app/api/v1/recommendations.py
-    app/api/v1/whatsapp.py
+    app/core/{config,database,security}.py
+    app/api/v1/{auth,plots,recommendations,ask,advisor,telegram}.py
     app/domain/models/
-    app/services/satellite_service.py
-    app/services/weather_service.py
-    app/services/agronomy_service.py
-    app/services/orchestrator.py
-    app/services/validator.py
-    app/services/explain.py
-    app/services/notification.py
-    tests/test_engine.py
-    tests/test_validator.py
-  web/
+    app/services/
+      orchestrator.py      # Backend
+      validator.py         # Backend
+      weather_service.py   # Agronomy
+      agronomy_service.py  # Agronomy
+      satellite_service.py # Satellite
+      explain.py           # Explanation
+      notification.py      # Interface
+    tests/test_engine.py   # ETc = 3.15 locked
+  web/                     # Interface — Next.js + Leaflet + OSM
 ```
 
-`docker-compose.yml` runs the API, PostGIS, and Redis. `.env.example` lists the database URL, the Earth Engine credentials, the Mapbox token, the model key, the speech key, and the WhatsApp token. Secrets stay out of git.
+```bash
+cp .env.example .env
+docker compose up --build
+# API  http://localhost:8000/docs
+# Web  http://localhost:3000
+```
 
-`Makefile` shortcuts: `make up`, `make test`, `make migrate`.
+`Makefile` shortcuts: `make up`, `make down`, `make api-test`, `make seed`.
 
 ## Seats
 
@@ -341,11 +351,11 @@ flowchart LR
 
 **Backend.** JWT and registration, PostGIS and migrations, Farmer, Plot, and Recommendation models, the REST API, roles, rate limiting, the orchestrator, the validator, and Docker Compose.
 
-**Satellite.** Earth Engine, NDVI and NDWI, cloud masking, Sentinel-1 fallback, PNG overlays, and the daily imagery fetch. Missing data stay null.
+**Satellite.** Copernicus Data Space, NDVI and NDWI, cloud masking, Sentinel-1 fallback, PNG overlays, and the daily imagery fetch. Missing data stay null.
 
 **Agronomy.** Open-Meteo, Penman-Monteith ET0, ETc and the root-zone balance, disease-risk rules, spray volume per plot, the 15 km/h wind block, and the engine tests.
 
-**Interface.** Mapbox drawing, the farmer dashboard, the advisor pages, French, Darija, and Arabic in the UI, the WhatsApp webhook, and Darija text-to-speech.
+**Interface.** Leaflet drawing, the farmer dashboard, the advisor pages, French, Darija, and Arabic in the UI, the Telegram webhook, and Darija speech via Piper or Web Speech.
 
 **Explanation.** The explanation prompt, the FAO and INRA folder, Ask Qatra, the offline template, the integration test of the daily workflow, and the GitHub Actions workflow. Prometheus and Grafana come after that test is green.
 
@@ -358,23 +368,23 @@ How the five work:
 - Friday: each person demos on plot `MA-001`.
 - A blocker older than one day is reported the same day.
 
-The demo is done when one citrus plot in Morocco can be drawn on a phone, with live weather, a satellite date or an honest missing image, a dose or `needs_check`, a spray decision, an explanation in French and Darija, that same plot on the advisor map, and a WhatsApp message to one test phone.
+The demo is done when one citrus plot in Morocco can be drawn on a phone, with live weather, a satellite date or an honest missing image, a dose or `needs_check`, a spray decision, an explanation in French and Darija, that same plot on the advisor map, and a Telegram message to one test phone.
 
 ## Six weeks
 
-**Week 1 — contract.** Backend brings up Compose with PostGIS and Redis, the sample plot, and `docs/contract.json`. Satellite reads one Earth Engine scene for that coordinate, or records why access is still pending. Agronomy returns ET0 from a fixed weather sample and passes ETc = 3.15. Interface shows a Mapbox map of Morocco. Explanation returns French and Darija for the fake JSON, with no extra numbers.
+**Week 1 — contract.** Backend brings up Compose with PostGIS and Redis, the sample plot, and `docs/contract.json`. Satellite reads one Copernicus Data Space scene for that coordinate, or records why access is still pending. Agronomy returns ET0 from a fixed weather sample and passes ETc = 3.15. Interface shows a Leaflet map of Morocco. Explanation returns French and Darija for the fake JSON, with no extra numbers.
 
 **Week 2 — accounts and live inputs.** Backend ships register, login, and plot create with a polygon. Agronomy stores Open-Meteo weather and the Penman-Monteith result in the contract fields. Satellite writes NDVI, NDWI, date, and valid-pixel share. Interface draws a polygon and posts it. Explanation explains a real agronomy JSON in three languages.
 
 **Week 3 — one plot end to end.** Backend runs weather, satellite, agronomy, and the validator on `MA-001`. Validator cases: missing image, image older than 10 days, wind at 16 km/h. Interface shows the card with forecast time and image time as two facts. Satellite adds the PNG overlay.
 
-**Week 4 — farmer product.** The farmer path works from the map to the card. Agronomy adds `fungal_risk` and the spray volume from area. Explanation ships Ask Qatra. Interface sends one WhatsApp text to a test number. Satellite survives a failed Earth Engine call without crashing the API.
+**Week 4 — farmer product.** The farmer path works from the map to the card. Agronomy adds `fungal_risk` and the spray volume from area. Explanation ships Ask Qatra. Interface sends one Telegram text to a test number. Satellite survives a failed Copernicus Data Space call without crashing the API.
 
-**Week 5 — advisor and WhatsApp.** Advisor map, visit list, and season total. Daily worker over the demo plots. Darija voice note attached to the WhatsApp message. Sentinel-1 path when the optical scene is too cloudy. Inbound WhatsApp question answered by Ask Qatra.
+**Week 5 — advisor and notifications.** Advisor map, visit list, and season total. Daily worker over the demo plots. Darija voice note attached to the Telegram message. Sentinel-1 path when the optical scene is too cloudy. Inbound Telegram question answered by Ask Qatra.
 
-**Week 6 — defense.** Farmer and advisor roles enforced. Integration test of the daily workflow in GitHub Actions. Prometheus and Grafana on the API and the worker. Full demo: a dose, a `needs_check`, a blocked spray, the advisor page, and WhatsApp text plus voice. Each person explains their module in two minutes. The result is a decision aid. The farmer still checks the soil before changing a real irrigation turn.
+**Week 6 — defense.** Farmer and advisor roles enforced. Integration test of the daily workflow in GitHub Actions. Prometheus and Grafana on the API and the worker. Full demo: a dose, a `needs_check`, a blocked spray, the advisor page, and Telegram text plus voice. Each person explains their module in two minutes. The result is a decision aid. The farmer still checks the soil before changing a real irrigation turn.
 
-If Earth Engine access is still closed in week 5, the daily job still runs on weather and the crop profile, the card says the image is missing, and the satellite function is shown on one downloaded scene.
+If Copernicus Data Space access is still closed in week 5, the daily job still runs on weather and the crop profile, the card says the image is missing, and the satellite function is shown on one downloaded scene.
 
 ## Done
 
@@ -383,4 +393,4 @@ If Earth Engine access is still closed in week 5, the daily job still runs on we
 - Engine and validator tests pass: 3.15 mm, replay, missing satellite, old satellite, wind above 15 km/h.
 - The card shows French, Darija, and Arabic, including from the offline template when the model is off.
 - The advisor page lists the demo plots and a season total.
-- A test phone receives the WhatsApp text and the Darija voice note, and a reply comes back through Ask Qatra.
+- A test phone receives the Telegram text and the Darija voice note, and a reply comes back through Ask Qatra.

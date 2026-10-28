@@ -1,0 +1,22 @@
+{
+  "type": "Feature",
+  "properties": {
+    "plot_id": "MA-001",
+    "crop": "citrus",
+    "stage": "fruit_growth",
+    "irrigation_method": "drip",
+    "area_ha": 1.2
+  },
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [-7.5898, 33.5731],
+        [-7.5888, 33.5731],
+        [-7.5888, 33.5740],
+        [-7.5898, 33.5740],
+        [-7.5898, 33.5731]
+      ]
+    ]
+  }
+}
