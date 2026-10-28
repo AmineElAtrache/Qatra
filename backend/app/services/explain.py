@@ -1,17 +1,44 @@
-"""Explanation seat — Ollama when up; offline templates always available.
+"""Explanation seat — offline template engine with FAO/INRA reference folder.
 
-Trilingual engine (FR, AR, Darija). It analyses live agronomy payloads produced
-by the orchestrator and restitutes only numbers that already exist in the JSON.
-No number is ever invented.
+The templates are the fallback when the language model is down. They only
+restitute numbers that already exist in the payload. The knowledge folder
+(`backend/knowledge/fao`, `backend/knowledge/inra`) holds the reference pages
+the explanation may quote; they never replace the formula in code.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from app.core.config import settings
+
+
+# ---------------------------------------------------------------------------
+# Knowledge folder loading
+# ---------------------------------------------------------------------------
+def knowledge_dir() -> Path:
+    """Resolve the knowledge folder relative to the backend package."""
+    base = Path(settings.knowledge_dir)
+    if base.is_absolute():
+        return base
+    # settings.knowledge_dir is "knowledge" → resolve against backend/
+    return Path(__file__).resolve().parents[2] / base
+
+
+def list_reference_pages() -> list[Path]:
+    """Return every markdown page found under the FAO/INRA knowledge folder."""
+    root = knowledge_dir()
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.rglob("*.md") if p.is_file())
+
+
+def load_reference() -> str:
+    """Concatenate the knowledge pages into one searchable blob."""
+    return "\n\n---\n\n".join(p.read_text(encoding="utf-8") for p in list_reference_pages())
 
 
 # ---------------------------------------------------------------------------
@@ -57,14 +84,12 @@ def _fr(data: dict[str, Any]) -> str:
     if method:
         parts.append(f"Irrigation par {method}.")
 
-    # Fungal / disease risk from the live payload
     fungal = _get(data, "fungal_risk", _get(data, "disease_risk", "low"))
     if fungal == "high":
         parts.append("Risque fongique élevé, restez vigilant.")
     elif fungal == "medium":
         parts.append("Risque fongique modéré, surveillance conseillée.")
 
-    # Spray block from the live payload
     if _get(data, "spray_blocked"):
         parts.append("Traitement par pulvérisation bloqué aujourd'hui (vent fort).")
 
@@ -129,7 +154,7 @@ def _darija(data: dict[str, Any]) -> str:
 
 
 def template_texts(payload: dict[str, Any]) -> dict[str, str]:
-    """Numbers only from payload — never invent."""
+    """Offline fallback — numbers only from payload, never invented."""
     return {
         "fr": _fr(payload),
         "ar": _ar(payload),
