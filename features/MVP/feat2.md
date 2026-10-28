@@ -1,1 +1,0 @@
- `feat(explanation)` | Moteur de génération trilingue (FR, AR, Darija) analysant les payloads JSON agronomiques en direct

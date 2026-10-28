@@ -1,1 +1,0 @@
-`feat(ci)` | Ajout des tests d'intégration quotidiens via GitHub Actions et configuration des tableaux de bord Prometheus/Grafana 
