@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     knowledge_dir: str = "knowledge"
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
+    whatsapp_verify_token: str = ""
+    whatsapp_app_secret: str = ""
     notification_channel: str = "web"
     speech_backend: str = "webspeech"
 

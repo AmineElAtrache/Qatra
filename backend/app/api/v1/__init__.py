@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import advisor, ask, auth, health, plots, recommendations, telegram
+from app.api.v1 import advisor, ask, auth, health, plots, recommendations, telegram, whatsapp
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -11,3 +11,4 @@ api_router.include_router(recommendations.router, prefix="/plots", tags=["recomm
 api_router.include_router(ask.router, prefix="/plots", tags=["ask"])
 api_router.include_router(advisor.router, prefix="/advisor", tags=["advisor"])
 api_router.include_router(telegram.router, prefix="/telegram", tags=["telegram"])
+api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"])
