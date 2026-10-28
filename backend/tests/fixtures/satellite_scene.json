@@ -1,0 +1,8 @@
+{
+  "type": "qatra-satellite-scene",
+  "observed_at": "2025-06-01T10:20:00Z",
+  "bounds": [-8, 33, -7, 34],
+  "ndvi": 0.61,
+  "ndwi": 0.18,
+  "valid_pixel_pct": 88
+}
