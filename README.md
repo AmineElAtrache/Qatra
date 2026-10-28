@@ -45,7 +45,7 @@ Five people build it, at the same level. Module M352, Advanced AI Engineering.
 | Retrieval | Small FAO and INRA folder | Ask Qatra answers from the validated result plus those pages. |
 | Containers | Docker Compose | API, PostGIS, and Redis on one command. |
 | Tests and deploy | GitHub Actions | The daily-workflow test on every pull request. |
-| Metrics | Prometheus and Grafana | After that test is green. |
+| Metrics | Prometheus and Grafana | API metrics at `/metrics`; Grafana at `http://localhost:3001`. Set `GRAFANA_ADMIN_PASSWORD` in `.env` before starting the stack. |
 
 Deep learning is a later stress model, after field labels exist. The first dose is the reviewed water-balance engine. Sensors are out of this build.
 
