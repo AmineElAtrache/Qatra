@@ -1,4 +1,4 @@
-# Script de présentation — Membre 5 : Explication, QA et Ops
+# Script de présentation — Explication, QA et Ops
 
 Bonjour. Dans le projet Qatra, je suis responsable de la partie explication, assurance qualité et opérations.
 
