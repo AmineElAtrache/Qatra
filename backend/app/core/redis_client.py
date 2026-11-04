@@ -19,20 +19,21 @@ def enqueue_plot(public_id: str) -> int:
     return int(r.rpush(DAILY_QUEUE, public_id))
 
 
-def enqueue_many(public_ids: list[str]) -> int:
+def enqueue_many(public_ids: list[str], queue: str = DAILY_QUEUE) -> int:
     if not public_ids:
         return 0
     r = get_redis()
-    return int(r.rpush(DAILY_QUEUE, *public_ids))
+    r.rpush(queue, *public_ids)
+    return len(public_ids)
 
 
-def pop_plot(timeout: int = 2) -> str | None:
+def pop_plot(timeout: int = 2, queue: str = DAILY_QUEUE) -> str | None:
     r = get_redis()
-    item = r.blpop(DAILY_QUEUE, timeout=timeout)
+    item = r.blpop(queue, timeout=timeout)
     if not item:
         return None
     return item[1]
 
 
-def queue_length() -> int:
-    return int(get_redis().llen(DAILY_QUEUE))
+def queue_length(queue: str = DAILY_QUEUE) -> int:
+    return int(get_redis().llen(queue))

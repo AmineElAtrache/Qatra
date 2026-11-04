@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.config import settings
-from app.core.geo import centroid_lon_lat, default_ma001_geojson
+from app.core.geo import centroid_lon_lat
 from app.services import agronomy_service, explain, notification, satellite_service, validator, weather_service
 from app.services.agronomy_service import AgronomyInput
 
@@ -22,24 +22,20 @@ async def run_recommendation(
     lon: float | None = None,
     notify: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    parcel = geojson or default_ma001_geojson()
+    parcel = geojson
     center = centroid_lon_lat(parcel)
     if lon is None or lat is None:
         if center:
             lon, lat = center
         else:
-            lon, lat = -7.5898, 33.5731
+            lon, lat = None, None
 
-    weather = await weather_service.fetch_weather(lat, lon)
+    if lat is not None and lon is not None:
+        weather = await weather_service.fetch_weather(lat, lon)
+    else:
+        weather = weather_service.missing_weather("missing_plot_geometry")
     sat = await satellite_service.fetch_indices(geojson=parcel)
     sat = satellite_service.maybe_sentinel1_fallback(sat)
-    if sat.ndvi is None and settings.satellite_demo_fallback:
-        from datetime import date
-
-        sat = satellite_service.sample_optical()
-        sat.ndvi_observed_at = date.today().isoformat()
-        sat.quality = "demo_sample"
-        sat.reason = "gee_unavailable_demo_fallback"
 
     agro = agronomy_service.run_agronomy(
         AgronomyInput(
@@ -60,6 +56,7 @@ async def run_recommendation(
             ndvi=sat.ndvi,
             ndvi_observed_at=sat.ndvi_observed_at,
             valid_pixel_pct=sat.valid_pixel_pct,
+            et0_mm_day=weather.et0_mm_day,
         )
     )
 

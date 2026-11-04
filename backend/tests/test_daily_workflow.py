@@ -73,3 +73,23 @@ def test_daily_recommendation_pipeline(monkeypatch):
     assert result["texts"]["fr"] == "Recommendation ready"
     assert result["lat"] is not None
     assert result["lon"] is not None
+
+
+def test_missing_geometry_does_not_use_demo_location(monkeypatch):
+    async def no_weather(*args, **kwargs):
+        raise AssertionError("No weather request is allowed without a location")
+    async def satellite(**kwargs):
+        assert kwargs["geojson"] is None
+        return orchestrator.satellite_service.missing_optical("missing_geometry")
+    async def explanation(payload):
+        return {}
+    monkeypatch.setattr(orchestrator.weather_service, "fetch_weather", no_weather)
+    monkeypatch.setattr(orchestrator.satellite_service, "fetch_indices", satellite)
+    monkeypatch.setattr(orchestrator.explain, "explain", explanation)
+    monkeypatch.setattr(orchestrator.settings, "satellite_demo_fallback", True)
+    result = asyncio.run(orchestrator.run_recommendation(
+        plot_id="OTHER", crop="citrus", stage="fruit_growth", irrigation_method="drip", area_ha=1.2))
+    assert result["status"] == "needs_check"
+    assert result["ndvi"] is None
+    assert result["display_dose"] is None
+    assert result["lat"] is None

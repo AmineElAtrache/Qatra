@@ -1,6 +1,6 @@
 """Load demo farmer + advisor + MA-001 when DB is up. Backend seat."""
 
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import SessionLocal
 from app.core.geo import default_ma001_geojson, geojson_to_text
 from app.core.security import hash_password
 from app.domain.models import Farmer, Plot
@@ -35,7 +35,6 @@ def _ensure_user(
 
 
 def main() -> None:
-    Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
         farmer = _ensure_user(
@@ -59,6 +58,7 @@ def main() -> None:
             plot = Plot(
                 public_id="MA-001",
                 owner_id=farmer.id,
+                advisor_id=advisor.id,
                 crop="citrus",
                 stage="fruit_growth",
                 irrigation_method="drip",
@@ -68,9 +68,11 @@ def main() -> None:
             db.add(plot)
             db.commit()
         else:
-            changed = False
             if plot.owner_id != farmer.id:
-                plot.owner_id = farmer.id
+                raise RuntimeError("MA-001 belongs to another farmer; seed will not replace it")
+            changed = False
+            if plot.advisor_id is None:
+                plot.advisor_id = advisor.id
                 changed = True
             if not plot.geom:
                 plot.geom = geom_text

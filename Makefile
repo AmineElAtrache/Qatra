@@ -30,13 +30,13 @@ web-install:
 	cd web && npm install
 
 migrate:
-	cd backend && alembic upgrade head
+	docker compose exec api alembic upgrade head
 
 seed:
-	cd backend && python -m app.workers.seed_ma001
+	docker compose exec api python -m app.workers.seed_ma001
 
 worker:
-	cd backend && python -m app.workers.daily --once
+	docker compose exec api python -m app.workers.daily --once
 
 contract:
 	@echo docs/contract.json

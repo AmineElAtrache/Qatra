@@ -13,9 +13,7 @@ def advisor_plots(
     db: Session = Depends(get_db),
     advisor: Farmer = Depends(require_advisor),
 ) -> list[dict]:
-    _ = advisor
-    # MVP: advisor sees all plots (link table comes later)
-    plots = db.query(Plot).all()
+    plots = db.query(Plot).filter(Plot.advisor_id == advisor.id).all()
     out: list[dict] = []
     for p in plots:
         last = (
