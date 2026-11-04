@@ -1,6 +1,24 @@
 /** Shapes from docs/contract.json and backend/app/api/v1. Never invent fields. */
 
 export type Status = "show_dose" | "needs_check";
+
+/** GeoJSON Feature as returned by the API (`geojson` field). Coordinates are [lon, lat]. */
+export interface PlotFeature {
+  type: "Feature";
+  properties?: Record<string, unknown>;
+  geometry: { type: "Polygon"; coordinates: number[][][] } | { type: "MultiPolygon"; coordinates: number[][][][] };
+}
+
+/** Agronomy seat, week 5: totals since 1 September. */
+export interface SeasonTotals {
+  season_start: string;
+  days_counted: number;
+  days_missing_etc: number;
+  etc_mm: number | null;
+  rain_mm: number | null;
+  water_advised_mm: number | null;
+  water_advised_m3: number | null;
+}
 export type Risk = "low" | "medium" | "high";
 
 export interface Recommendation {
@@ -27,6 +45,10 @@ export interface Recommendation {
   spray_volume_l?: number | null;
   disease_risk?: Risk | null;
   fungal_risk?: Risk | null;
+  fungal_factors?: string[] | null;
+  humidity_pct?: number | null;
+  temperature_c?: number | null;
+  season?: SeasonTotals | null;
   status: Status;
   reasons?: string[];
   engine_version?: string;
@@ -45,8 +67,7 @@ export interface Plot {
   stage: string;
   irrigation_method: string;
   area_ha: number;
-  /** Optional until the Backend seat returns geometry. [[lon, lat], ...] */
-  coordinates?: number[][][] | null;
+  geojson?: PlotFeature | null;
 }
 
 export interface PlotCreate {
@@ -65,12 +86,23 @@ export interface AdvisorPlot {
   status: Status | null;
   etc_mm: number | null;
   gross_irrigation_mm: number | null;
-  /** Optional fields the Backend seat can add later. */
-  coordinates?: number[][][] | null;
-  lat?: number | null;
-  lon?: number | null;
+  geojson?: PlotFeature | null;
   ndvi_observed_at?: string | null;
+  season_start?: string | null;
+  season_days?: number | null;
+  season_etc_mm?: number | null;
+  season_rain_mm?: number | null;
   season_water_mm?: number | null;
+  season_water_m3?: number | null;
+}
+
+export interface AppNotification {
+  id: number;
+  plot_id: string | null;
+  channel: string;
+  body: string;
+  status: string;
+  created_at: string;
 }
 
 export interface Session {

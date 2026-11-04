@@ -58,6 +58,12 @@ export const BLOCKING = new Set([
 
 export const reasonLabel = (code: string) => REASONS[code] ?? code;
 
+export const FUNGAL_FACTOR_LABEL: Record<string, string> = {
+  humid_air: "air humide",
+  mild_temperature: "température douce",
+  rain_wets_leaves: "feuilles mouillées par la pluie",
+};
+
 export const RISK_LABEL: Record<string, string> = { low: "Faible", medium: "Moyen", high: "Élevé" };
 
 export function fmtMm(v?: number | null, digits = 2): string {

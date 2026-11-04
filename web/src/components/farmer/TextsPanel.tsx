@@ -6,11 +6,27 @@ import type { Recommendation } from "@/lib/types";
 
 type Lang = "darija" | "fr" | "ar";
 
-const TABS: { key: Lang; label: string; speech: string }[] = [
-  { key: "darija", label: "Darija", speech: "ar-MA" },
-  { key: "fr", label: "Français", speech: "fr-FR" },
-  { key: "ar", label: "العربية", speech: "ar-SA" },
+const TABS: { key: Lang; label: string }[] = [
+  { key: "darija", label: "Darija" },
+  { key: "fr", label: "Français" },
+  { key: "ar", label: "العربية" },
 ];
+
+const ARABIC_SCRIPT = /[\u0600-\u06FF]/;
+
+/**
+ * Pick a voice by the script of the text, not only by the tab:
+ * Darija is often written in Latin letters ("Khass n2aked"), which an Arabic
+ * voice cannot read, so Latin text goes to a French voice.
+ */
+function pickVoice(voices: SpeechSynthesisVoice[], text: string): SpeechSynthesisVoice | null {
+  const wanted = ARABIC_SCRIPT.test(text) ? ["ar-MA", "ar"] : ["fr-MA", "fr"];
+  for (const tag of wanted) {
+    const v = voices.find((x) => x.lang.toLowerCase().startsWith(tag.toLowerCase()));
+    if (v) return v;
+  }
+  return null;
+}
 
 export function textsOf(rec: Recommendation): Record<Lang, string | undefined> {
   return {
@@ -27,16 +43,25 @@ export default function TextsPanel({ rec }: { rec: Recommendation }) {
   const [speaking, setSpeaking] = useState(false);
   const [copied, setCopied] = useState(false);
   const [canSpeak, setCanSpeak] = useState(false);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   useEffect(() => {
-    setCanSpeak(typeof window !== "undefined" && "speechSynthesis" in window);
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    setCanSpeak(true);
+    const synth = window.speechSynthesis;
+    const refresh = () => setVoices(synth.getVoices());
+    refresh();
+    synth.addEventListener("voiceschanged", refresh);
     return () => {
-      if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
+      synth.removeEventListener("voiceschanged", refresh);
+      synth.cancel();
     };
   }, []);
 
   const text = texts[lang];
-  const tab = TABS.find((t) => t.key === lang)!;
+  const voice = text ? pickVoice(voices, text) : null;
+  // Voices load late on some browsers: only call it missing once the list is known.
+  const noVoice = canSpeak && voices.length > 0 && !!text && !voice;
 
   function speak() {
     if (!text || !canSpeak) return;
@@ -47,9 +72,10 @@ export default function TextsPanel({ rec }: { rec: Recommendation }) {
       return;
     }
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = tab.speech;
-    const voice = synth.getVoices().find((v) => v.lang.startsWith(tab.speech.slice(0, 2)));
-    if (voice) u.voice = voice;
+    if (voice) {
+      u.voice = voice;
+      u.lang = voice.lang;
+    }
     u.onend = () => setSpeaking(false);
     u.onerror = () => setSpeaking(false);
     synth.speak(u);
@@ -91,7 +117,7 @@ export default function TextsPanel({ rec }: { rec: Recommendation }) {
         {text || <span className="muted">Pas encore de texte dans cette langue.</span>}
       </p>
       <div className="texts-actions">
-        <button className="btn btn-sm" onClick={speak} disabled={!text || !canSpeak}>
+        <button className="btn btn-sm" onClick={speak} disabled={!text || !canSpeak || noVoice}>
           {speaking ? <Square size={15} /> : <Volume2 size={16} />}
           {speaking ? "Arrêter" : "Écouter"}
         </button>
@@ -100,6 +126,11 @@ export default function TextsPanel({ rec }: { rec: Recommendation }) {
           {copied ? "Copié" : "Copier"}
         </button>
       </div>
+      {(noVoice || (!canSpeak && text)) && (
+        <p className="small muted" style={{ margin: "6px 0 0" }}>
+          Pas de voix pour cette langue sur cet appareil. Le texte reste affiché.
+        </p>
+      )}
     </div>
   );
 }

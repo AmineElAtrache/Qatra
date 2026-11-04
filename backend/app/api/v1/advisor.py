@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_advisor
 from app.core.database import get_db
+from app.core.geo import parse_plot_geom
 from app.domain.models import Farmer, Plot, Recommendation
 
 router = APIRouter()
@@ -24,6 +25,7 @@ def advisor_plots(
         )
         out.append(
             {
+                "geojson": parse_plot_geom(p.geom),  # Interface seat: advisor map
                 "public_id": p.public_id,
                 "stage": p.stage,
                 "status": last.status if last else None,

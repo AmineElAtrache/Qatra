@@ -27,6 +27,21 @@ export function centroid(ring: number[][]): [number, number] {
   return [lat, lon];
 }
 
+/** Outer ring of the API's GeoJSON (first polygon of a MultiPolygon). */
+export function ringFromFeature(
+  feature?: { geometry?: { type: string; coordinates: unknown } } | null,
+): number[][] | null {
+  const g = feature?.geometry;
+  if (!g) return null;
+  if (g.type === "Polygon") return (g.coordinates as number[][][])[0] ?? null;
+  if (g.type === "MultiPolygon") return (g.coordinates as number[][][][])[0]?.[0] ?? null;
+  return null;
+}
+
+/** Above this the drawing is a region, not an orchard. */
+export const MAX_PLOT_HA = 200;
+export const MIN_PLOT_HA = 0.01;
+
 /** Leaflet wants [lat, lon]. */
 export const toLatLng = (ring: number[][]) => ring.map(([lon, lat]) => [lat, lon] as [number, number]);
 

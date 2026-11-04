@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut, MessageCircleQuestion, Map as MapIcon, Users } from "lucide-react";
 import Logo from "./Logo";
+import NotificationBell from "./NotificationBell";
 import { useSession } from "@/lib/session";
 
 const LINKS = [
@@ -38,6 +39,7 @@ export default function TopBar() {
         <div className="account">
           {session ? (
             <>
+              <NotificationBell />
               <span className="email">{session.email}</span>
               <button
                 className="btn btn-ghost btn-sm"

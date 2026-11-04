@@ -16,7 +16,7 @@ import {
 import RequireRole from "@/components/ui/RequireRole";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { ApiError, advisorPlots } from "@/lib/api";
-import { centroid } from "@/lib/geo";
+import { ringFromFeature } from "@/lib/geo";
 import { daysSince, fmtMm, isSensitive, stageLabel } from "@/lib/labels";
 import { useSession } from "@/lib/session";
 import type { AdvisorPlot, Session } from "@/lib/types";
@@ -71,14 +71,11 @@ function Dashboard({ session }: { session: Session }) {
     check: plots.filter((p) => p.status === "needs_check").length,
     none: plots.filter((p) => !p.status).length,
   };
-  const mapPlots = plots.map((p) => {
-    const ring = p.coordinates?.[0] ?? null;
-    const point: [number, number] | null =
-      p.lat != null && p.lon != null ? [p.lat, p.lon] : ring ? centroid(ring) : null;
-    return { id: p.public_id, ring, point: ring ? null : point, status: p.status };
-  });
-  const located = mapPlots.filter((p) => p.ring || p.point).length;
-  const season = plots.map((p) => p.season_water_mm).filter((v): v is number => v != null);
+  const mapPlots = plots.map((p) => ({ id: p.public_id, ring: ringFromFeature(p.geojson), status: p.status }));
+  const located = mapPlots.filter((p) => p.ring).length;
+  const season = plots.filter((p) => p.season_water_mm != null);
+  const seasonMm = season.reduce((a, p) => a + (p.season_water_mm ?? 0), 0);
+  const seasonM3 = season.reduce((a, p) => a + (p.season_water_m3 ?? 0), 0);
 
   return (
     <main className="page">
@@ -124,8 +121,8 @@ function Dashboard({ session }: { session: Session }) {
             <div className="notice info small" style={{ marginTop: 10 }}>
               <MapPinned size={17} />
               <span>
-                {plots.length - located} parcelle(s) sans position : l&apos;API conseiller ne renvoie pas encore leur
-                contour.
+                {plots.length - located} parcelle(s) sans contour enregistré : elles restent dans la liste mais pas
+                sur la carte.
               </span>
             </div>
           )}
@@ -179,6 +176,9 @@ function Dashboard({ session }: { session: Session }) {
                             <span className="num">Dose {fmtMm(p.gross_irrigation_mm)} mm</span>
                           )}
                           {age !== null && <span className="num">Image {age} j</span>}
+                          {p.season_water_m3 != null && (
+                            <span className="num">Saison {fmtMm(p.season_water_m3, 0)} m³</span>
+                          )}
                         </span>
                       </span>
                       <StatusBadge status={p.status} />
@@ -194,15 +194,21 @@ function Dashboard({ session }: { session: Session }) {
               <Droplets size={18} /> Bilan de saison
             </h2>
             {season.length ? (
-              <p className="num" style={{ margin: 0, fontSize: "1.6rem", fontWeight: 700 }}>
-                {fmtMm(season.reduce((a, b) => a + b, 0), 0)} mm
-                <span className="small muted" style={{ fontWeight: 400, marginLeft: 8 }}>
-                  d&apos;eau conseillée sur {season.length} parcelle(s)
-                </span>
-              </p>
+              <>
+                <p className="num" style={{ margin: 0, fontSize: "1.6rem", fontWeight: 700 }}>
+                  {fmtMm(seasonM3, 0)} m³
+                  <span className="small muted" style={{ fontWeight: 400, marginLeft: 8 }}>
+                    d&apos;eau conseillée depuis le 1er septembre
+                  </span>
+                </p>
+                <p className="small muted num" style={{ margin: "4px 0 0" }}>
+                  {fmtMm(seasonMm, 1)} mm cumulés sur {season.length} parcelle(s). Les jours « à vérifier » n&apos;ajoutent
+                  pas d&apos;eau.
+                </p>
+              </>
             ) : (
               <p className="small muted" style={{ margin: 0 }}>
-                Le total de saison s&apos;affichera quand l&apos;API conseiller renverra le cumul par parcelle.
+                Pas encore de cumul : il apparaît après le premier calcul de la saison.
               </p>
             )}
           </section>
