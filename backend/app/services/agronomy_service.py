@@ -14,7 +14,10 @@ radiation MJ m-2 day-1, water depths mm, areas ha.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Versioned tables (MVP, citrus). Change = bump KC_TABLE_VERSION + review.
@@ -263,6 +266,36 @@ def spray_blocked(wind_kmh: float | None) -> bool:
     return wind_kmh >= WIND_BLOCK_KMH
 
 
+# Codes the card and the Explanation seat can turn into words.
+FUNGAL_FACTOR_HUMID = "humid_air"  # relative humidity >= 80 %
+FUNGAL_FACTOR_MILD = "mild_temperature"  # 15–28 °C
+FUNGAL_FACTOR_RAIN = "rain_wets_leaves"  # rain >= 2 mm
+
+
+def fungal_factors(
+    *,
+    humidity_pct: float | None,
+    temperature_c: float | None,
+    rain_mm: float | None,
+) -> list[str] | None:
+    """Which wet-weather conditions are met today, in a fixed order.
+
+    None when humidity or temperature is missing: the risk is then unknown,
+    not "low". Missing rain counts as no rain (Open-Meteo sends 0 when dry).
+    """
+    if humidity_pct is None or temperature_c is None:
+        return None
+    t_lo, t_hi = FUNGAL_T_RANGE_C
+    factors: list[str] = []
+    if humidity_pct >= FUNGAL_RH_MIN_PCT:
+        factors.append(FUNGAL_FACTOR_HUMID)
+    if t_lo <= temperature_c <= t_hi:
+        factors.append(FUNGAL_FACTOR_MILD)
+    if (rain_mm or 0.0) >= FUNGAL_RAIN_MIN_MM:
+        factors.append(FUNGAL_FACTOR_RAIN)
+    return factors
+
+
 def fungal_risk(
     *,
     humidity_pct: float | None,
@@ -274,16 +307,12 @@ def fungal_risk(
     3 → high, 2 → medium, 0–1 → low. Returns None if humidity or temperature
     is missing. Generic risk only, not a diagnosis of a named disease.
     """
-    if humidity_pct is None or temperature_c is None:
+    factors = fungal_factors(humidity_pct=humidity_pct, temperature_c=temperature_c, rain_mm=rain_mm)
+    if factors is None:
         return None
-    t_lo, t_hi = FUNGAL_T_RANGE_C
-    score = 0
-    score += humidity_pct >= FUNGAL_RH_MIN_PCT
-    score += t_lo <= temperature_c <= t_hi
-    score += (rain_mm or 0.0) >= FUNGAL_RAIN_MIN_MM
-    if score >= 3:
+    if len(factors) >= 3:
         return "high"
-    if score == 2:
+    if len(factors) == 2:
         return "medium"
     return "low"
 
@@ -330,6 +359,7 @@ class AgronomyResult:
     raw_mm: float | None = None
     kc_table_version: str = KC_TABLE_VERSION
     missing: list[str] = field(default_factory=list)
+    fungal_factors: list[str] | None = None
 
 
 def run_agronomy(inp: AgronomyInput) -> AgronomyResult:
@@ -398,6 +428,11 @@ def run_agronomy(inp: AgronomyInput) -> AgronomyResult:
     elif blocked:
         reasons.append("wind_blocks_spray")
 
+    factors = fungal_factors(
+        humidity_pct=inp.humidity_pct,
+        temperature_c=inp.temperature_c,
+        rain_mm=inp.effective_rain_mm,
+    )
     risk = fungal_risk(
         humidity_pct=inp.humidity_pct,
         temperature_c=inp.temperature_c,
@@ -420,4 +455,126 @@ def run_agronomy(inp: AgronomyInput) -> AgronomyResult:
         taw_mm=taw,
         raw_mm=raw,
         missing=missing,
+        fungal_factors=factors,
     )
+
+
+# ---------------------------------------------------------------------------
+# Replay — rebuild today's input from a stored recommendation
+# ---------------------------------------------------------------------------
+
+
+def replay_input(payload: Mapping[str, Any]) -> AgronomyInput:
+    """Rebuild the AgronomyInput that produced a stored payload.
+
+    Running ``run_agronomy`` on it must give the same ETc, dose, spray and
+    fungal results as the day it was stored (same engine version).
+    A field absent from the payload stays None: nothing is filled in.
+    """
+    return AgronomyInput(
+        et0_mm_day=payload.get("et0_mm_day"),
+        stage=payload.get("stage"),
+        irrigation_method=payload.get("irrigation_method"),
+        effective_rain_mm=payload.get("effective_rain_mm"),
+        wind_kmh=payload.get("wind_kmh"),
+        area_ha=payload.get("area_ha") or 1.0,
+        humidity_pct=payload.get("humidity_pct"),
+        temperature_c=payload.get("temperature_c"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Season totals — Moroccan agricultural campaign, 1 September → 31 August
+# ---------------------------------------------------------------------------
+
+SEASON_START_MONTH = 9
+SEASON_START_DAY = 1
+M3_PER_MM_HA = 10.0  # 1 mm over 1 ha = 10 m3
+
+
+def season_start(day: date) -> date:
+    """First day of the campaign that contains ``day`` (1 September)."""
+    year = day.year if (day.month, day.day) >= (SEASON_START_MONTH, SEASON_START_DAY) else day.year - 1
+    return date(year, SEASON_START_MONTH, SEASON_START_DAY)
+
+
+@dataclass(frozen=True)
+class SeasonTotals:
+    season_start: str  # ISO date
+    days_counted: int  # days with a stored recommendation
+    days_missing_etc: int  # of those, days where ETc could not be computed
+    etc_mm: float | None  # estimated need of the trees
+    rain_mm: float | None  # useful rain
+    water_advised_mm: float | None  # doses actually shown to the farmer
+    water_advised_m3: float | None  # same, in m3 for the plot area
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _as_day(value: date | datetime | str) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).replace("Z", "+00:00")
+    return datetime.fromisoformat(text).date() if "T" in text or " " in text else date.fromisoformat(text)
+
+
+def _advised_mm(payload: Mapping[str, Any]) -> float:
+    """Water we told the farmer to apply that day. needs_check days count 0."""
+    if payload.get("status") != "show_dose":
+        return 0.0
+    dose = payload["display_dose"] if "display_dose" in payload else payload.get("gross_irrigation_mm")
+    return float(dose) if dose is not None else 0.0
+
+
+def season_totals(
+    records: Iterable[tuple[date | datetime | str, Mapping[str, Any]]],
+    *,
+    today: date,
+    area_ha: float | None,
+) -> SeasonTotals:
+    """Sum the stored daily recommendations of the current season.
+
+    - Only days from 1 September of the current campaign up to ``today``.
+    - One value per day: the last recommendation of that day (a second click
+      on "Calculer" replaces the first, it does not double the water).
+    - No day stored → every total is None (null stays null).
+    """
+    start = season_start(today)
+    latest: dict[date, tuple[tuple[float, int], Mapping[str, Any]]] = {}
+    for order, (stamp, payload) in enumerate(records):
+        day = _as_day(stamp)
+        if not start <= day <= today:
+            continue
+        rank = (_timestamp(stamp), order)  # later time wins; same time → later row wins
+        if day not in latest or rank >= latest[day][0]:
+            latest[day] = (rank, payload)
+
+    days = [payload for _, (_, payload) in sorted(latest.items())]
+    if not days:
+        return SeasonTotals(start.isoformat(), 0, 0, None, None, None, None)
+
+    etc_values = [p.get("etc_mm") for p in days]
+    etc_known = [float(v) for v in etc_values if v is not None]
+    rain = sum(float(p.get("effective_rain_mm") or 0.0) for p in days)
+    water = sum(_advised_mm(p) for p in days)
+    return SeasonTotals(
+        season_start=start.isoformat(),
+        days_counted=len(days),
+        days_missing_etc=len(etc_values) - len(etc_known),
+        etc_mm=round(sum(etc_known), 2) if etc_known else None,
+        rain_mm=round(rain, 2),
+        water_advised_mm=round(water, 2),
+        water_advised_m3=round(water * area_ha * M3_PER_MM_HA, 1) if area_ha else None,
+    )
+
+
+def _timestamp(stamp: date | datetime | str) -> float:
+    if isinstance(stamp, str):
+        text = stamp.replace("Z", "+00:00")
+        stamp = datetime.fromisoformat(text) if ("T" in text or " " in text) else date.fromisoformat(text)
+    if isinstance(stamp, datetime):
+        return stamp.timestamp() if stamp.tzinfo else stamp.replace(tzinfo=None).timestamp()
+    return datetime.combine(stamp, datetime.min.time()).timestamp()

@@ -45,6 +45,8 @@ async def run_recommendation(
             effective_rain_mm=weather.rain_mm,
             wind_kmh=weather.wind_kmh,
             area_ha=area_ha,
+            humidity_pct=weather.humidity_pct,
+            temperature_c=weather.temperature_c,
         )
     )
 
@@ -78,9 +80,12 @@ async def run_recommendation(
         "valid_pixel_pct": sat.valid_pixel_pct,
         "satellite_source": sat.satellite_source,
         "wind_kmh": weather.wind_kmh,
+        "humidity_pct": weather.humidity_pct,
+        "temperature_c": weather.temperature_c,
         "spray_blocked": agro.spray_blocked,
         "disease_risk": agro.disease_risk,
         "fungal_risk": agro.fungal_risk,
+        "fungal_factors": agro.fungal_factors,
         "status": decision.status,
         "reasons": list(dict.fromkeys(agro.reasons + decision.reasons)),
         "engine_version": settings.engine_version,
