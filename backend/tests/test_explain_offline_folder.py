@@ -35,7 +35,7 @@ def test_offline_templates_three_languages():
         "spray_blocked": False,
     }
     out = template_texts(payload)
-    assert set(out) == {"fr", "ar", "darija"}
+    assert set(out) == {"en", "fr", "ar", "darija"}
     assert "3.15" in out["fr"] or "3,15" in out["fr"]
     assert "4.7" in out["fr"] or "4,7" in out["fr"]
     # No invented number.
@@ -44,7 +44,7 @@ def test_offline_templates_three_languages():
 
 def test_offline_templates_needs_check_hides_dose():
     out = template_texts({"status": "needs_check"})
-    assert set(out) == {"fr", "ar", "darija"}
+    assert set(out) == {"en", "fr", "ar", "darija"}
     assert "3.15" not in out["fr"]
 
 

@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.core.geo import centroid_lon_lat, parse_plot_geom
 from app.domain.models import Farmer, Message, Plot, Recommendation
 from app.services import notification
+from app.services.explain import save_last_stored_state
 from app.services.orchestrator import run_recommendation
 
 router = APIRouter()
@@ -75,6 +76,7 @@ async def create_recommendation(
     db.add(row)
     db.commit()
     db.refresh(row)
+    save_last_stored_state(payload)
     return {"id": row.id, "recommendation": payload}
 
 

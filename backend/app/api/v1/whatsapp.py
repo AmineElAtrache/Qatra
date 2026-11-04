@@ -61,10 +61,7 @@ async def whatsapp_webhook(
                 question = (message.get("text") or {}).get("body", "").strip()
                 if not question:
                     continue
-                answer = await ask_qatra(
-                    question,
-                    {"status": "needs_check", "plot_id": "unknown"},
-                )
+                answer = await ask_qatra(question)
                 results.append(
                     {
                         "message_id": message.get("id"),

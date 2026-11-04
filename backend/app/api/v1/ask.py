@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -5,13 +7,14 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_farmer
 from app.core.database import get_db
 from app.domain.models import Farmer, Plot, Recommendation
-from app.services.explain import ask_qatra
+from app.services.explain import ask_qatra, save_last_stored_state
 
 router = APIRouter()
 
 
 class AskIn(BaseModel):
     question: str
+    language: Literal["en", "fr", "ar"] | None = None
 
 
 @router.post("/{public_id}/ask")
@@ -32,5 +35,6 @@ async def ask(
     )
     if not last:
         raise HTTPException(status_code=400, detail="No recommendation yet")
-    answer = await ask_qatra(body.question, last.payload)
+    save_last_stored_state(last.payload)
+    answer = await ask_qatra(body.question, language=body.language)
     return {"answer": answer, "from_recommendation_id": last.id}

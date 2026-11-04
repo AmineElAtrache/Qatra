@@ -1,13 +1,11 @@
-"""Explanation seat — offline template engine with FAO/INRA reference folder.
-
-The templates are the fallback when the language model is down. They only
-restitute numbers that already exist in the payload. The knowledge folder
-(`backend/knowledge/fao`, `backend/knowledge/inra`) holds the reference pages
-the explanation may quote; they never replace the formula in code.
-"""
+"""Deterministic, multilingual Ask Qatra answers grounded in stored state and references."""
 
 from __future__ import annotations
 
+import json
+import math
+import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -15,239 +13,369 @@ import httpx
 
 from app.core.config import settings
 
+_NO_DATA = {
+    "en": "The latest recommendation needs verification. No irrigation amount is available yet.",
+    "fr": "La dernière recommandation doit être vérifiée. Aucune dose d'irrigation n'est disponible.",
+    "ar": "يجب التحقق من آخر توصية. لا توجد جرعة ري متاحة حاليا.",
+    "darija": "Khass n2akdo mn akher tawsiya. Ma kaynach doza dyal s9i daba.",
+}
 
-# ---------------------------------------------------------------------------
-# Knowledge folder loading
-# ---------------------------------------------------------------------------
+
 def knowledge_dir() -> Path:
     """Resolve the knowledge folder relative to the backend package."""
-    base = Path(settings.knowledge_dir)
-    if base.is_absolute():
-        return base
-    # settings.knowledge_dir is "knowledge" → resolve against backend/
-    return Path(__file__).resolve().parents[2] / base
+    root = Path(settings.knowledge_dir)
+    return root if root.is_absolute() else Path(__file__).resolve().parents[2] / root
 
 
 def list_reference_pages() -> list[Path]:
-    """Return every markdown page found under the FAO/INRA knowledge folder."""
+    """Return all static FAO and INRA markdown reference pages."""
     root = knowledge_dir()
     if not root.is_dir():
         return []
-    return sorted(p for p in root.rglob("*.md") if p.is_file())
+    return sorted(page for page in root.rglob("*.md") if page.is_file())
 
 
 def load_reference() -> str:
-    """Concatenate the knowledge pages into one searchable blob."""
-    return "\n\n---\n\n".join(p.read_text(encoding="utf-8") for p in list_reference_pages())
+    """Concatenate all static reference pages."""
+    return "\n\n---\n\n".join(
+        page.read_text(encoding="utf-8") for page in list_reference_pages()
+    )
 
 
-# ---------------------------------------------------------------------------
-# Field normalisation — accept both the contract schema and older aliases
-# ---------------------------------------------------------------------------
+def last_stored_state_path() -> Path:
+    """Resolve the local JSON state path."""
+    path = Path(settings.last_stored_state_path)
+    return path if path.is_absolute() else Path(__file__).resolve().parents[2] / path
+
+
+def load_last_stored_state() -> dict[str, Any]:
+    """Load the last recommendation snapshot, failing explicitly on invalid JSON."""
+    path = last_stored_state_path()
+    if not path.exists():
+        return {"status": "needs_check"}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Unable to read stored Ask Qatra state at {path}") from exc
+    if not isinstance(state, dict):
+        raise ValueError(f"Stored Ask Qatra state at {path} must be a JSON object")
+    return state
+
+
+def save_last_stored_state(state: dict[str, Any]) -> None:
+    """Atomically persist the latest recommendation for offline channel webhooks."""
+    path = last_stored_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        serialized_state = json.dumps(state, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Unable to serialize Ask Qatra state for {path}") from exc
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as state_file:
+            state_file.write(serialized_state + "\n")
+            temporary_path = Path(state_file.name)
+        temporary_path.replace(path)
+    except OSError as exc:
+        raise ValueError(f"Unable to save Ask Qatra state at {path}") from exc
+
+
+def _stored_irrigation(data: dict[str, Any]) -> dict[str, Any]:
+    irrigation = data.get("irrigation_recommendation")
+    return irrigation if isinstance(irrigation, dict) else {}
+
+
 def _get(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
-    for k in keys:
-        if k in data and data[k] is not None:
-            return data[k]
+    for key in keys:
+        value = data.get(key)
+        if value is not None:
+            return value
     return default
 
 
+def _valid_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _number(data: dict[str, Any], *keys: str) -> str | None:
+    value = _get(data, *keys)
+    return str(value) if _valid_number(value) else None
+
+
 def _status(data: dict[str, Any]) -> str:
-    return str(_get(data, "status", "needs_check")).lower()
+    return str(_get(data, "status", default="needs_check")).lower()
 
 
 def _show_dose(data: dict[str, Any]) -> bool:
-    return _status(data) == "show_dose" and _get(data, "display_dose") is not None
-
-
-# ---------------------------------------------------------------------------
-# Template builders — one per language, all driven by the same payload
-# ---------------------------------------------------------------------------
-def _fr(data: dict[str, Any]) -> str:
-    parts: list[str] = []
-
-    if not _show_dose(data):
-        return (
-            "Besoin à vérifier. La dose précise n'est pas affichée tant que "
-            "les données ne sont pas confirmées."
+    irrigation = _stored_irrigation(data)
+    return (
+        _status(data) == "show_dose"
+        and (
+            _valid_number(_get(data, "display_dose"))
+            or _valid_number(_get(data, "gross_irrigation_mm"))
+            or _valid_number(_get(data, "water_volume_mm"))
         )
-
-    etc = _get(data, "etc_mm")
-    rain = _get(data, "effective_rain_mm", 0.0)
-    gross = _get(data, "gross_irrigation_mm")
-    method = _get(data, "irrigation_method", "")
-    crop = _get(data, "crop", "culture")
-
-    parts.append(
-        f"Besoin estimé {etc} mm (ETc) pour votre {crop}. "
-        f"Pluie utile {rain} mm. Dose brute indicative {gross} mm."
-    )
-    if method:
-        parts.append(f"Irrigation par {method}.")
-
-    fungal = _get(data, "fungal_risk", _get(data, "disease_risk", "low"))
-    if fungal == "high":
-        parts.append("Risque fongique élevé, restez vigilant.")
-    elif fungal == "medium":
-        parts.append("Risque fongique modéré, surveillance conseillée.")
-
-    if _get(data, "spray_blocked"):
-        parts.append("Traitement par pulvérisation bloqué aujourd'hui (vent fort).")
-
-    return " ".join(parts)
-
-
-def _ar(data: dict[str, Any]) -> str:
-    parts: list[str] = []
-
-    if not _show_dose(data):
-        return "يجب التحقق. الجرعة الدقيقة غير معروضة ما دامت البيانات غير مؤكدة."
-
-    etc = _get(data, "etc_mm")
-    rain = _get(data, "effective_rain_mm", 0.0)
-    gross = _get(data, "gross_irrigation_mm")
-    crop = _get(data, "crop", "المحصول")
-
-    parts.append(
-        f"الاحتياج التقديري {etc} مم (ETc) لـ {crop}. "
-        f"مطر نافع {rain} مم. جرعة خام إرشادية {gross} مم."
+    ) or (
+        str(irrigation.get("action", "")).upper() == "IRRIGATE"
+        and _valid_number(irrigation.get("water_volume_mm"))
     )
 
-    fungal = _get(data, "fungal_risk", _get(data, "disease_risk", "low"))
-    if fungal == "high":
-        parts.append("انتبه، خطر الأمراض (الفطريات) مرتفع بسبب الرطوبة.")
-    elif fungal == "medium":
-        parts.append("يوجد خطر متوسط للمرض، المراقبة موصى بها.")
 
-    if _get(data, "spray_blocked"):
-        parts.append("العلاج بالرش ممنوع اليوم بسبب الريح القوي.")
-
-    return " ".join(parts)
+def _risk(data: dict[str, Any]) -> str | None:
+    risk = _get(data, "fungal_risk", "disease_risk")
+    if isinstance(risk, dict):
+        risk = _get(risk, "level")
+    if risk is None:
+        return None
+    return str(risk).lower()
 
 
-def _darija(data: dict[str, Any]) -> str:
-    parts: list[str] = []
+def _metric_parts(data: dict[str, Any], language: str) -> list[str]:
+    labels = {
+        "en": (
+            ("etc_mm", "ETc"),
+            ("effective_rain_mm", "effective rain"),
+            ("gross_irrigation_mm", "gross irrigation"),
+        ),
+        "fr": (
+            ("etc_mm", "ETc"),
+            ("effective_rain_mm", "pluie utile"),
+            ("gross_irrigation_mm", "dose brute"),
+        ),
+        "ar": (
+            ("etc_mm", "ETc"),
+            ("effective_rain_mm", "مطر نافع"),
+            ("gross_irrigation_mm", "جرعة الري الإجمالية"),
+        ),
+        "darija": (
+            ("etc_mm", "ETc"),
+            ("effective_rain_mm", "shta nafi3a"),
+            ("gross_irrigation_mm", "doza dyal s9i"),
+        ),
+    }[language]
+    parts = []
+    for key, label in labels:
+        value = _number(data, key)
+        if key == "gross_irrigation_mm" and value is None:
+            value = _number(data, "water_volume_mm")
+            if value is None:
+                irrigation = _stored_irrigation(data)
+                nested_value = irrigation.get("water_volume_mm")
+                if _valid_number(nested_value):
+                    value = str(nested_value)
+            if value is None:
+                value = _number(data, "display_dose")
+        if value is not None:
+            parts.append(f"{label}: {value} mm")
+    return parts
 
-    if not _show_dose(data):
-        return "Khass n2aked. Doza ma kaynach 7it data ma kamlach."
 
-    etc = _get(data, "etc_mm")
-    rain = _get(data, "effective_rain_mm", 0.0)
-    gross = _get(data, "gross_irrigation_mm")
-    method = _get(data, "irrigation_method", "")
+def _template(data: dict[str, Any], language: str) -> str:
+    parts = []
+    if _show_dose(data):
+        metrics = _metric_parts(data, language)
+        method = _get(data, "irrigation_method")
+        if language == "en":
+            text = "Stored irrigation values: " + "; ".join(metrics) + "."
+            if method:
+                text += f" Method: {method}."
+        elif language == "fr":
+            text = "Valeurs d'irrigation enregistrées : " + "; ".join(metrics) + "."
+            if method:
+                text += f" Méthode : {method}."
+        elif language == "ar":
+            text = "قيم الري المسجلة: " + "؛ ".join(metrics) + "."
+            if method:
+                text += f" الطريقة: {method}."
+        else:
+            text = "L9iyam dyal s9i li tsjlo: " + "; ".join(metrics) + "."
+            if method:
+                text += f" Tari9a: {method}."
+        parts.append(text)
+    elif not _risk(data) and _get(data, "spray_blocked") is None:
+        return _NO_DATA[language]
+    else:
+        parts.append(_NO_DATA[language])
 
-    parts.append(
-        f"L7aja dyal lma: {etc} mm. Shta nafi3a: {rain} mm. Doza ta9ribiya: {gross} mm."
-    )
-    if method:
-        parts.append(f"Irrigation: {method}.")
-
-    fungal = _get(data, "fungal_risk", _get(data, "disease_risk", "low"))
-    if fungal == "high":
-        parts.append("رد بالك، كاين خطر مرتفع ديال الفطريات والبياض.")
-    elif fungal == "medium":
-        parts.append("كاين شوية الخطر ديال الفطريات، حاول تراقب الشجر ديالك.")
-
-    if _get(data, "spray_blocked"):
-        parts.append("Traitement pulvérisation bloqué aujourd'hui (vent fort).")
-
+    risk = _risk(data)
+    if risk:
+        risk_messages = {
+            "high": {
+                "en": "Fungal risk is high; monitor the crop.",
+                "fr": "Le risque fongique est élevé ; surveillez la culture.",
+                "ar": "خطر الأمراض الفطرية مرتفع؛ راقب المحصول.",
+                "darija": "Kayn khatar kbir dyal lfetriyat; ra9eb lma7soul.",
+            },
+            "medium": {
+                "en": "Fungal risk is moderate; monitoring is advised.",
+                "fr": "Le risque fongique est modéré ; une surveillance est conseillée.",
+                "ar": "خطر الأمراض الفطرية متوسط؛ يُنصح بالمراقبة.",
+                "darija": "Kayn khatar motawasset dyal lfetriyat; ra9eb lma7soul.",
+            },
+        }
+        if risk in risk_messages:
+            parts.append(risk_messages[risk][language])
+    if _get(data, "spray_blocked") is True:
+        spray = {
+            "en": "Spraying is blocked according to the stored recommendation.",
+            "fr": "La pulvérisation est bloquée selon la recommandation enregistrée.",
+            "ar": "الرش ممنوع حسب التوصية المسجلة.",
+            "darija": "Rach mamnou3 7sab tawsiya li tsjlat.",
+        }
+        parts.append(spray[language])
+    elif _get(data, "spray_blocked") is False:
+        spray = {
+            "en": "The stored recommendation does not block spraying.",
+            "fr": "La recommandation enregistrée ne bloque pas la pulvérisation.",
+            "ar": "التوصية المسجلة لا تمنع الرش.",
+            "darija": "Tawsiya li tsjlat ma katmna3ch rach.",
+        }
+        parts.append(spray[language])
     return " ".join(parts)
 
 
 def template_texts(payload: dict[str, Any]) -> dict[str, str]:
-    """Offline fallback — numbers only from payload, never invented."""
+    """Build deterministic responses using only numeric values present in state."""
     return {
-        "fr": _fr(payload),
-        "ar": _ar(payload),
-        "darija": _darija(payload),
+        "en": _template(payload, "en"),
+        "fr": _template(payload, "fr"),
+        "ar": _template(payload, "ar"),
+        "darija": _template(payload, "darija"),
     }
 
 
-async def explain(payload: dict[str, Any]) -> dict[str, str]:
-    """Try Ollama; on any failure return templates (demo must survive model down)."""
-    fallback = template_texts(payload)
+async def ollama_available() -> bool:
+    """Check local Ollama health; answers remain deterministic even when it is healthy."""
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.post(
-                f"{settings.ollama_base_url}/api/generate",
-                json={
-                    "model": settings.ollama_model,
-                    "stream": False,
-                    "prompt": (
-                        "Explain this irrigation JSON in three short lines labeled FR, DARIJA, AR. "
-                        "Use only numbers present in the JSON. JSON: "
-                        f"{payload}"
-                    ),
-                },
-            )
-            if r.status_code != 200:
-                return fallback
-            # Keep MVP simple: still return templates so numbers stay controlled.
-            # Explanation seat can replace parsing later without changing the contract.
-            return fallback
-    except Exception:
-        return fallback
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            response = await client.get(f"{settings.ollama_base_url}/api/tags")
+            return response.status_code == 200
+    except httpx.HTTPError:
+        return False
 
 
-async def ask_qatra(question: str, last_payload: dict[str, Any]) -> dict[str, str]:
-    """Answer a farmer question from the last recommendation + FAO/INRA folder.
-
-    The answer is built from the stored payload and the reference pages; the
-    language model is only consulted when available and never invents a number.
-    """
-    base = await explain(last_payload)
-    context = _build_ask_context(question, last_payload)
-    base["answer"] = context
-    base["note"] = (
-        f"Ask Qatra (MVP): answered from stored recommendation + knowledge folder. "
-        f"Q={question[:200]}"
-    )
-    return base
+async def explain(payload: dict[str, Any]) -> dict[str, str]:
+    """Return offline templates; never accept generated model content as advice."""
+    await ollama_available()
+    return template_texts(payload)
 
 
-def _build_ask_context(question: str, payload: dict[str, Any]) -> str:
-    """Ground the answer in the payload and the knowledge reference pages."""
-    q = (question or "").lower()
-    refs = _relevant_reference(q)
-    ref_blob = "\n".join(f"- {p.name}" for p in refs) or "(no matching reference page)"
-
-    if "irrig" in q or "eau" in q or "water" in q or "lma" in q or "سقي" in q:
-        return (
-            f"Besoin estimé {_get(payload, 'etc_mm')} mm (ETc), "
-            f"pluie utile {_get(payload, 'effective_rain_mm', 0.0)} mm, "
-            f"dose brute {_get(payload, 'gross_irrigation_mm')} mm "
-            f"(method: {_get(payload, 'irrigation_method', 'n/a')}). "
-            f"Reference: {ref_blob}"
-        )
-    if "risque" in q or "maladie" in q or "fongique" in q or "fong" in q or " disease" in q or "مرض" in q or "خاطر" in q:
-        return (
-            f"Risque: {_get(payload, 'fungal_risk', _get(payload, 'disease_risk', 'low'))}. "
-            f"Reference: {ref_blob}"
-        )
-    if "vent" in q or "spray" in q or "رش" in q:
-        blocked = _get(payload, "spray_blocked", False)
-        return (
-            f"Spray blocked={blocked} (wind {_get(payload, 'wind_kmh', 'n/a')} km/h). "
-            f"Reference: {ref_blob}"
-        )
-    # Generic fallback: state the stored recommendation.
-    return (
-        f"From the last recommendation (status={_get(payload, 'status', 'needs_check')}): "
-        f"ETc {_get(payload, 'etc_mm')} mm, dose {_get(payload, 'gross_irrigation_mm')} mm. "
-        f"Reference: {ref_blob}"
-    )
+def _language(question: str, language: str | None = None) -> str:
+    if language and language.lower().split("-")[0] in {"en", "fr", "ar"}:
+        return language.lower().split("-")[0]
+    if re.search(r"[\u0600-\u06ff]", question):
+        return "ar"
+    if re.search(r"\b(lma|s9i|sqi|doza|wach|chno)\b", question.lower()):
+        return "darija"
+    if re.search(
+        r"\b(comment|combien|eau|irrigation|besoin|risque|maladie|vent|culture)\b|[àâçéèêëîïôùûüÿœ]",
+        question.lower(),
+    ):
+        return "fr"
+    return "en"
 
 
-def _relevant_reference(question: str) -> list[Path]:
-    """Return knowledge pages that mention a token from the question."""
-    q = (question or "").lower()
-    tokens = [t for t in q.split() if len(t) > 3]
-    matches: list[Path] = []
-    for p in list_reference_pages():
-        try:
-            text = p.read_text(encoding="utf-8").lower()
-        except Exception:
+def _topic(question: str) -> str:
+    normalized = question.lower()
+    if any(
+        word in normalized
+        for word in ("irrig", "water", "eau", "lma", "s9i", "sqi", "سقي", "ماء", "ري")
+    ):
+        return "irrigation"
+    if any(
+        word in normalized
+        for word in ("risk", "risque", "disease", "maladie", "fung", "مرض", "خطر")
+    ):
+        return "disease"
+    if any(
+        word in normalized for word in ("wind", "spray", "vent", "pulv", "رش", "ريح")
+    ):
+        return "spray"
+    return "general"
+
+
+def _reference_quotes(topic: str) -> list[tuple[str, str]]:
+    keywords = {
+        "irrigation": (
+            "rain",
+            "demand",
+            "irrigation",
+            "dose",
+            "root zone",
+            "crop coefficient",
+            "etc",
+        ),
+        "disease": ("risk", "temperature", "humidity", "rain", "disease"),
+        "spray": ("spray", "wind", "blocked"),
+        "general": ("explanation", "stored", "reference"),
+    }[topic]
+    quotes: list[tuple[str, str]] = []
+    for page in list_reference_pages():
+        if topic == "irrigation" and "fao" not in page.parts:
             continue
-        name = p.name.lower()
-        if any(tok in text or tok in name for tok in tokens):
-            matches.append(p)
-    return matches
+        if topic in {"disease", "spray"} and "inra" not in page.parts:
+            continue
+        source = "FAO" if "fao" in page.parts else "INRA"
+        paragraphs = page.read_text(encoding="utf-8").split("\n\n")
+        for paragraph in paragraphs:
+            if "|" in paragraph:
+                continue
+            text = " ".join(
+                line.strip().lstrip("- ").strip() for line in paragraph.splitlines()
+            ).strip()
+            lowered = text.lower()
+            if (
+                not text
+                or text.startswith("#")
+                or text.startswith("|")
+                or text.startswith("`")
+                or text.startswith("Source:")
+                or text.startswith("Reference")
+                or len(text) < 40
+                or any(char.isdigit() for char in text)
+                or re.search(r"\bmm\b|_[a-z]+", lowered)
+                or not any(word in lowered for word in keywords)
+            ):
+                continue
+            quotes.append((source, text))
+            if len(quotes) == 2:
+                return quotes
+    return quotes
+
+
+def _localized_answer(question: str, payload: dict[str, Any], language: str) -> str:
+    answer = _template(payload, language)
+    quotes = _reference_quotes(_topic(question))
+    if quotes:
+        quote_label = {
+            "en": "Reference",
+            "fr": "Référence",
+            "ar": "المرجع",
+            "darija": "Marja3",
+        }[language]
+        answer += " " + " ".join(
+            f"{quote_label} ({source}): “{quote}”" for source, quote in quotes
+        )
+    return answer
+
+
+async def ask_qatra(
+    question: str,
+    last_payload: dict[str, Any] | None = None,
+    language: str | None = None,
+) -> dict[str, str]:
+    """Unified Ask handler for app and messaging webhooks."""
+    payload = last_payload if last_payload is not None else load_last_stored_state()
+    texts = await explain(payload)
+    response_language = _language(question, language)
+    return {
+        **texts,
+        "language": response_language,
+        "answer": _localized_answer(question, payload, response_language),
+        "note": "Answered deterministically from the last stored state and static FAO/INRA references.",
+    }

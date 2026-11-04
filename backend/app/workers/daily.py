@@ -16,6 +16,7 @@ from app.core.geo import centroid_lon_lat, parse_plot_geom
 from app.core.redis_client import DAILY_QUEUE, get_redis, enqueue_many, pop_plot, queue_length
 from app.domain.models import Farmer, Message, Plot, Recommendation
 from app.services import notification
+from app.services.explain import save_last_stored_state
 from app.services.orchestrator import run_recommendation
 
 logger = logging.getLogger("qatra.daily")
@@ -102,6 +103,7 @@ async def process_one(public_id: str, user: Farmer | None = None) -> dict | None
         )
         db.add(row)
         db.commit()
+        save_last_stored_state(payload)
         logger.info("processed %s status=%s", public_id, payload.get("status"))
         return payload
     finally:

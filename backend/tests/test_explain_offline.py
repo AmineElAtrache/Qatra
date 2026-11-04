@@ -2,6 +2,7 @@
 
 import asyncio
 
+from app.services import explain as explain_module
 from app.services.explain import explain, template_texts
 
 
@@ -19,7 +20,15 @@ def test_templates_have_three_languages():
     assert "darija" in texts and "ar" in texts
 
 
-def test_explain_survives_ollama_down():
+def test_explain_survives_ollama_down(monkeypatch):
+    checked = []
+
+    async def ollama_is_down():
+        checked.append(True)
+        return False
+
+    monkeypatch.setattr(explain_module, "ollama_available", ollama_is_down)
     payload = {"status": "needs_check"}
     out = asyncio.run(explain(payload))
-    assert set(out) >= {"fr", "darija", "ar"}
+    assert set(out) == {"en", "fr", "darija", "ar"}
+    assert checked == [True]

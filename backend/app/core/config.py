@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
     knowledge_dir: str = "knowledge"
+    last_stored_state_path: str = "app/services/data/last_stored_state.json"
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
     whatsapp_verify_token: str = ""
