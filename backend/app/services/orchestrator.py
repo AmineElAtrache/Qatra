@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.config import settings
-from app.services import agronomy_service, explain, satellite_service, validator, weather_service
+from app.core.geo import centroid_lon_lat
+from app.services import agronomy_service, explain, notification, satellite_service, validator, weather_service
 from app.services.agronomy_service import AgronomyInput
 
 
@@ -16,11 +17,24 @@ async def run_recommendation(
     stage: str,
     irrigation_method: str,
     area_ha: float,
-    lat: float = 33.5731,
-    lon: float = -7.5898,
+    geojson: dict[str, Any] | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
+    notify: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    weather = await weather_service.fetch_weather(lat, lon)
-    sat = await satellite_service.fetch_indices()
+    parcel = geojson
+    center = centroid_lon_lat(parcel)
+    if lon is None or lat is None:
+        if center:
+            lon, lat = center
+        else:
+            lon, lat = None, None
+
+    if lat is not None and lon is not None:
+        weather = await weather_service.fetch_weather(lat, lon)
+    else:
+        weather = weather_service.missing_weather("missing_plot_geometry")
+    sat = await satellite_service.fetch_indices(geojson=parcel)
     sat = satellite_service.maybe_sentinel1_fallback(sat)
 
     agro = agronomy_service.run_agronomy(
@@ -42,6 +56,7 @@ async def run_recommendation(
             ndvi=sat.ndvi,
             ndvi_observed_at=sat.ndvi_observed_at,
             valid_pixel_pct=sat.valid_pixel_pct,
+            et0_mm_day=weather.et0_mm_day,
         )
     )
 
@@ -72,13 +87,24 @@ async def run_recommendation(
         "weather_observed_at": weather.observed_at,
         "weather_quality": weather.quality,
         "satellite_quality": sat.quality,
+        "lat": lat,
+        "lon": lon,
     }
+    payload.update(sat.to_contract_dict())
 
-    # Hide precise dose presentation when needs_check (values stay in payload for audit)
     if decision.status != "show_dose":
         payload["display_dose"] = None
     else:
         payload["display_dose"] = agro.gross_irrigation_mm
 
     payload["texts"] = await explain.explain(payload)
+
+    if notify and notify.get("opt_in"):
+        text = (payload.get("texts") or {}).get("fr") or (payload.get("texts") or {}).get("darija") or ""
+        payload["notification"] = await notification.notify_farmer(
+            channel=notify.get("channel"),
+            telegram_chat_id=notify.get("telegram_chat_id"),
+            text=text,
+        )
+
     return payload

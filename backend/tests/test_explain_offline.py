@@ -9,6 +9,7 @@ def test_templates_have_three_languages():
     texts = template_texts(
         {
             "status": "show_dose",
+            "display_dose": 4.7,
             "etc_mm": 3.15,
             "effective_rain_mm": 1.5,
             "gross_irrigation_mm": 4.7,

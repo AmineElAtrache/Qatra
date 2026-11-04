@@ -1,0 +1,19 @@
+{
+  "plot_id": "MA-001",
+  "crop_type": "Olive",
+  "irrigation_recommendation": {
+    "action": "IRRIGATE",
+    "water_volume_mm": 4.5,
+    "duration_hours": 2,
+    "status": "RECOMMENDED"
+  },
+  "fungal_risk": {
+    "level": "MEDIUM",
+    "treatment_advised": false
+  },
+  "weather_summary": {
+    "temp_max": 28,
+    "wind_speed_kmh": 12,
+    "spray_blocked": false
+  }
+}

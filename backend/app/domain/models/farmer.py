@@ -19,4 +19,4 @@ class Farmer(Base):
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    plots = relationship("Plot", back_populates="owner")
+    plots = relationship("Plot", back_populates="owner", foreign_keys="Plot.owner_id")

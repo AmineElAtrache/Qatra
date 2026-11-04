@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from math import isfinite
+from app.services.agronomy_service import kc_for_stage, efficiency
 
 
 MAX_WEATHER_AGE_HOURS = 48
@@ -19,6 +21,7 @@ class ValidationInput:
     ndvi: float | None
     ndvi_observed_at: str | None
     valid_pixel_pct: float | None
+    et0_mm_day: float | None = None
 
 
 @dataclass
@@ -30,31 +33,40 @@ class ValidationResult:
 def validate(inp: ValidationInput) -> ValidationResult:
     reasons: list[str] = []
 
-    if not inp.stage:
+    if kc_for_stage(inp.stage) is None:
         reasons.append("missing_stage")
-    if not inp.irrigation_method:
+    if efficiency(inp.irrigation_method) is None:
         reasons.append("missing_irrigation_method")
 
     if not inp.weather_observed_at:
         reasons.append("missing_weather")
     else:
         age_h = _hours_since(inp.weather_observed_at)
-        if age_h is not None and age_h > MAX_WEATHER_AGE_HOURS:
+        if age_h is None or age_h < 0:
+            reasons.append("invalid_weather_date")
+        elif age_h > MAX_WEATHER_AGE_HOURS:
             reasons.append("weather_stale")
+    if inp.et0_mm_day is None or not isfinite(inp.et0_mm_day) or inp.et0_mm_day < 0:
+        reasons.append("missing_et0")
 
     if inp.ndvi is None:
         reasons.append("missing_ndvi")
     else:
-        if inp.valid_pixel_pct is not None and inp.valid_pixel_pct < MIN_VALID_PIXELS:
+        if not isfinite(inp.ndvi) or not -1 <= inp.ndvi <= 1:
+            reasons.append("invalid_ndvi")
+        if inp.valid_pixel_pct is None or not isfinite(inp.valid_pixel_pct) or not MIN_VALID_PIXELS <= inp.valid_pixel_pct <= 100:
             reasons.append("low_valid_pixels")
         if inp.ndvi_observed_at:
             age_d = _days_since(inp.ndvi_observed_at)
-            if age_d is not None and age_d > MAX_SAT_AGE_DAYS:
+            if age_d is None or age_d < 0:
+                reasons.append("invalid_satellite_date")
+            elif age_d > MAX_SAT_AGE_DAYS:
                 reasons.append("satellite_stale")
+        else:
+            reasons.append("missing_satellite_date")
 
     # Missing NDVI alone forces needs_check (MVP rule from docs)
-    blocking = {"missing_stage", "missing_irrigation_method", "missing_weather", "weather_stale", "missing_ndvi", "satellite_stale", "low_valid_pixels"}
-    if blocking.intersection(reasons):
+    if reasons:
         return ValidationResult(status="needs_check", reasons=reasons)
     return ValidationResult(status="show_dose", reasons=reasons or ["ok"])
 

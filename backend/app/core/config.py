@@ -1,10 +1,17 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(PROJECT_ROOT / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     database_url: str = "postgresql+psycopg://qatra:qatra@localhost:5432/qatra"
     redis_url: str = "redis://localhost:6379/0"
@@ -17,11 +24,19 @@ class Settings(BaseSettings):
     open_meteo_base_url: str = "https://api.open-meteo.com/v1"
     copernicus_client_id: str = ""
     copernicus_client_secret: str = ""
+    gee_project_id: str = ""
+    gee_credentials_path: str = ""
+    satellite_overlay_dir: str = "artifacts/satellite"
+    # When true and GEE has no usable scene, use an explicit demo optical sample
+    # (never invents numbers in production — for local MVP demos only).
+    satellite_demo_fallback: bool = False
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
     knowledge_dir: str = "knowledge"
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
+    whatsapp_verify_token: str = ""
+    whatsapp_app_secret: str = ""
     notification_channel: str = "web"
     speech_backend: str = "webspeech"
 

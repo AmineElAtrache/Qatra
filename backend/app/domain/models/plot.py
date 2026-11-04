@@ -1,7 +1,6 @@
 from datetime import date, datetime
 
-from geoalchemy2 import Geometry
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -13,13 +12,15 @@ class Plot(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     public_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("farmers.id"))
+    advisor_id: Mapped[int | None] = mapped_column(ForeignKey("farmers.id"), nullable=True, index=True)
     crop: Mapped[str] = mapped_column(String(64), default="citrus")
     stage: Mapped[str] = mapped_column(String(64), default="fruit_growth")
     irrigation_method: Mapped[str] = mapped_column(String(32), default="drip")
     area_ha: Mapped[float] = mapped_column(Float, default=0.0)
     last_irrigation_on: Mapped[date | None] = mapped_column(Date, nullable=True)
-    geom = mapped_column(Geometry(geometry_type="POLYGON", srid=4326), nullable=True)
+    # EWKT / GeoJSON text for MVP (works without PostGIS). Upgrade to Geometry later.
+    geom: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    owner = relationship("Farmer", back_populates="plots")
+    owner = relationship("Farmer", back_populates="plots", foreign_keys=[owner_id])
     recommendations = relationship("Recommendation", back_populates="plot")

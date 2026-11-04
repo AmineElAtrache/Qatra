@@ -1,0 +1,5 @@
+# Pas de dépendance externe obligatoire pour la logique de base (Python standard suffit : json, typing)
+# Outils optionnels recommandés pour le développement, les tests et le typage :
+pytest>=7.0.0
+black>=22.0.0
+flake8>=4.0.0
