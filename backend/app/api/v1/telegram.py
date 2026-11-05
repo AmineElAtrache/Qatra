@@ -19,7 +19,8 @@ async def telegram_webhook(
     message = (body.get("message") or {})
     text = message.get("text") or ""
     chat = (message.get("chat") or {})
+    telegram_user = message.get("from") or {}
     chat_id = chat.get("id")
-    # MVP: answer from empty payload until chat↔plot linking exists
-    answer = await ask_qatra(text, {"status": "needs_check", "plot_id": "unknown"})
+    language = telegram_user.get("language_code") if isinstance(telegram_user, dict) else None
+    answer = await ask_qatra(text, language=language)
     return {"ok": True, "chat_id": chat_id, "answer": answer}

@@ -34,7 +34,7 @@ def test_whatsapp_text_message_routes_to_ask_qatra(monkeypatch):
     monkeypatch.setattr(whatsapp.settings, "whatsapp_app_secret", "app-secret")
     called = []
 
-    async def fake_ask_qatra(question, payload):
+    async def fake_ask_qatra(question, payload=None):
         called.append((question, payload))
         return {"answer": "Use the latest plot recommendation."}
 
@@ -71,7 +71,7 @@ def test_whatsapp_text_message_routes_to_ask_qatra(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert called == [("Besoin irrigation ?", {"status": "needs_check", "plot_id": "unknown"})]
+    assert called == [("Besoin irrigation ?", None)]
     assert response.json()["results"] == [
         {
             "message_id": "wamid.1",

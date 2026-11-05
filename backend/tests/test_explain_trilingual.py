@@ -24,7 +24,7 @@ def test_three_languages_on_live_payload():
 
     texts = template_texts(payload)
 
-    assert set(texts) == {"fr", "ar", "darija"}
+    assert set(texts) == {"en", "fr", "ar", "darija"}
     # Only numbers that exist in the payload are ever emitted.
     assert "3.15" in texts["fr"] or "3,15" in texts["fr"]
     assert "4.7" in texts["fr"] or "4,7" in texts["fr"]
@@ -44,14 +44,14 @@ def test_three_languages_when_spray_blocked():
         "fungal_risk": "high",
     }
     texts = template_texts(payload)
-    assert set(texts) == {"fr", "ar", "darija"}
+    assert set(texts) == {"en", "fr", "ar", "darija"}
     assert "pulvérisation" in texts["fr"].lower() or "vent" in texts["fr"].lower()
 
 
 def test_three_languages_on_needs_check():
     payload = {"status": "needs_check"}
     texts = template_texts(payload)
-    assert set(texts) == {"fr", "ar", "darija"}
+    assert set(texts) == {"en", "fr", "ar", "darija"}
     # No dose number leaked when the dose is hidden.
     assert "3.15" not in texts["fr"]
 
@@ -65,4 +65,4 @@ def test_trilingual_survives_ollama_down():
         "gross_irrigation_mm": 4.7,
     }
     out = template_texts(payload)
-    assert set(out) == {"fr", "ar", "darija"}
+    assert set(out) == {"en", "fr", "ar", "darija"}
