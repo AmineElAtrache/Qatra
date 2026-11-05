@@ -36,5 +36,5 @@ async def ask(
     if not last:
         raise HTTPException(status_code=400, detail="No recommendation yet")
     save_last_stored_state(last.payload)
-    answer = await ask_qatra(body.question, language=body.language)
+    answer = await ask_qatra(body.question, last_payload=last.payload, language=body.language)
     return {"answer": answer, "from_recommendation_id": last.id}

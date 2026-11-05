@@ -14,7 +14,7 @@ from app.core.security import create_access_token
 from app.domain.models import Farmer, Plot, Recommendation
 from app.main import app
 from app.workers import daily
-from app.api.v1 import jobs, recommendations
+from app.api.v1 import ask, jobs, recommendations
 
 
 @pytest.fixture
@@ -125,3 +125,19 @@ def test_manual_recommendation_passes_polygon_and_stores_row(setup, monkeypatch)
     assert response.status_code == 200
     with factory() as db:
         assert db.query(Recommendation).one().payload["status"] == "needs_check"
+
+
+def test_ask_uses_authorized_plot_payload_even_if_snapshot_changes(setup, monkeypatch):
+    client, users, factory = setup
+    payload = {"plot_id": "MA-001", "status": "needs_check"}
+    with factory() as db:
+        plot = db.query(Plot).filter(Plot.public_id == "MA-001").one()
+        db.add(Recommendation(plot_id=plot.id, engine_version="test", status="needs_check", payload=payload))
+        db.commit()
+    monkeypatch.setattr(ask, "save_last_stored_state", lambda state: None)
+    handler = AsyncMock(return_value={"answer": "Check the plot"})
+    monkeypatch.setattr(ask, "ask_qatra", handler)
+    response = client.post("/api/v1/plots/MA-001/ask", json={"question": "Water?"}, headers=headers(users[0]))
+    assert response.status_code == 200
+    assert handler.call_args.kwargs["last_payload"] == payload
+    assert client.post("/api/v1/plots/PRIVATE/ask", json={"question": "Water?"}, headers=headers(users[0])).status_code == 404

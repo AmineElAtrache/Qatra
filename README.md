@@ -1,5 +1,7 @@
 # Qatra
 
+Current integrated implementation: [full architecture, technologies, APIs and deployment](docs/ARCHITECTURE.md) (5 November 2026).
+
 Documentation de soutenance, en français : [docs/Qatra-Documentation.pdf](docs/Qatra-Documentation.pdf).
 
 Qatra is a precision-agriculture decision platform for citrus plots in Morocco.
