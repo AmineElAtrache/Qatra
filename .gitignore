@@ -49,6 +49,7 @@ cover/
 .env
 .env.*
 !.env.example
+docker-compose.gee.yml
 
 # Virtual Environments
 .venv/

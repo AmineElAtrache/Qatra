@@ -1,15 +1,18 @@
+import json
 from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_farmer
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.geo import coordinates_to_geojson, geojson_to_text, parse_plot_geom
-from app.domain.models import Farmer, Plot
-from app.services.satellite_service import InvalidGeoJSON, validate_polygon
+from app.domain.models import Farmer, Plot, Recommendation
+from app.services.satellite_service import InvalidGeoJSON, find_overlay_path, validate_polygon
 
 router = APIRouter()
 
@@ -83,6 +86,62 @@ def _plot_out(plot: Plot) -> PlotOut:
         irrigation_method=plot.irrigation_method,
         area_ha=plot.area_ha,
         geojson=parse_plot_geom(plot.geom),
+    )
+
+
+@router.get("/{public_id}/satellite-overlay")
+def get_satellite_overlay(
+    public_id: str,
+    db: Session = Depends(get_db),
+    user: Farmer = Depends(get_current_farmer),
+) -> FileResponse:
+    """Serve the latest authorized real satellite overlay as a PNG."""
+    query = db.query(Plot).filter(Plot.public_id == public_id)
+    if user.role == "advisor":
+        query = query.filter(Plot.advisor_id == user.id)
+    else:
+        query = query.filter(Plot.owner_id == user.id)
+    plot = query.first()
+    if plot is None:
+        raise HTTPException(status_code=404, detail="Plot not found")
+
+    latest = (
+        db.query(Recommendation)
+        .filter(Recommendation.plot_id == plot.id)
+        .order_by(Recommendation.created_at.desc())
+        .first()
+    )
+    payload = latest.payload if latest is not None and isinstance(latest.payload, dict) else {}
+    observed = payload.get("ndvi_observed_at")
+    if not observed or payload.get("satellite_source") != "sentinel-2":
+        raise HTTPException(status_code=404, detail="Satellite overlay not available")
+
+    geojson = parse_plot_geom(plot.geom)
+    try:
+        geometry = validate_polygon(geojson) if geojson else None
+    except InvalidGeoJSON as exc:
+        raise HTTPException(status_code=404, detail="Plot geometry unavailable") from exc
+    if geometry is None:
+        raise HTTPException(status_code=404, detail="Plot geometry unavailable")
+
+    overlay = find_overlay_path(
+        plot_id=plot.public_id,
+        geometry=geometry,
+        observed=str(observed)[:10],
+        directory=settings.satellite_overlay_dir,
+    )
+    if overlay is None:
+        raise HTTPException(status_code=404, detail="Satellite overlay not available")
+
+    bounds = [float(value) for value in geometry.bounds]
+    return FileResponse(
+        overlay,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Qatra-Overlay-Bounds": json.dumps(bounds, separators=(",", ":")),
+            "X-Qatra-Overlay-Observed-At": str(observed)[:10],
+        },
     )
 
 

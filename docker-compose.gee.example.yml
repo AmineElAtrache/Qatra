@@ -1,0 +1,20 @@
+# Optional local-development override for live Earth Engine in api and worker.
+# Copy this file to docker-compose.gee.yml locally and set
+# GEE_EARTHENGINE_CREDENTIALS_DIR to the existing Earth Engine credentials
+# directory. This is not an ADC/service-account JSON mount.
+services:
+  api:
+    environment:
+      GEE_PROJECT_ID: ${GEE_PROJECT_ID:?Set GEE_PROJECT_ID in .env}
+      GEE_CREDENTIALS_PATH: ""
+      GOOGLE_APPLICATION_CREDENTIALS: ""
+    volumes:
+      - ${GEE_EARTHENGINE_CREDENTIALS_DIR:?Set GEE_EARTHENGINE_CREDENTIALS_DIR to the EE credentials directory}:/root/.config/earthengine:ro
+
+  worker:
+    environment:
+      GEE_PROJECT_ID: ${GEE_PROJECT_ID:?Set GEE_PROJECT_ID in .env}
+      GEE_CREDENTIALS_PATH: ""
+      GOOGLE_APPLICATION_CREDENTIALS: ""
+    volumes:
+      - ${GEE_EARTHENGINE_CREDENTIALS_DIR:?Set GEE_EARTHENGINE_CREDENTIALS_DIR to the EE credentials directory}:/root/.config/earthengine:ro

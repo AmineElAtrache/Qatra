@@ -12,6 +12,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Qatra-Overlay-Bounds", "X-Qatra-Overlay-Observed-At"],
 )
 app.include_router(api_router)
 Instrumentator().instrument(app).expose(app, include_in_schema=False)

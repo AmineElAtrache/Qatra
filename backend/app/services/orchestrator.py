@@ -34,7 +34,7 @@ async def run_recommendation(
         weather = await weather_service.fetch_weather(lat, lon)
     else:
         weather = weather_service.missing_weather("missing_plot_geometry")
-    sat = await satellite_service.fetch_indices(geojson=parcel)
+    sat = await satellite_service.fetch_indices(geojson=parcel, plot_id=plot_id)
     sat = satellite_service.maybe_sentinel1_fallback(sat)
 
     agro = agronomy_service.run_agronomy(

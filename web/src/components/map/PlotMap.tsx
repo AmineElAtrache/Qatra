@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import {
   CircleMarker,
+  ImageOverlay,
   LayersControl,
   MapContainer,
   Polygon,
@@ -23,6 +24,8 @@ export type MapPlot = {
   ring?: number[][] | null; // [lon, lat]
   point?: [number, number] | null; // [lat, lon]
   status?: Status | null;
+  overlayUrl?: string | null;
+  overlayBounds?: [[number, number], [number, number]] | null; // [[south, west], [north, east]]
 };
 
 const COLORS: Record<string, string> = { show_dose: "#2e7d4f", needs_check: "#a86a12", none: "#0b1f3a" };
@@ -38,6 +41,8 @@ type Props = {
 };
 
 export default function PlotMap({ plots, selected, onSelect, drawing = false, draft = [], onAddPoint }: Props) {
+  const selectedPlot = plots.find((plot) => plot.id === selected);
+
   return (
     <MapContainer center={MOROCCO} zoom={6} minZoom={5} zoomControl={false} style={{ height: "100%", width: "100%" }}>
       <LayersControl position="topright">
@@ -109,6 +114,16 @@ export default function PlotMap({ plots, selected, onSelect, drawing = false, dr
             />
           ))}
         </>
+      )}
+
+      {selectedPlot?.overlayUrl && selectedPlot.overlayBounds && (
+        <ImageOverlay
+          key={selectedPlot.overlayUrl}
+          url={selectedPlot.overlayUrl}
+          bounds={selectedPlot.overlayBounds}
+          opacity={0.62}
+          interactive={false}
+        />
       )}
 
       <ClickCapture enabled={drawing} onAddPoint={onAddPoint} />

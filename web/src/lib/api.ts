@@ -80,6 +80,43 @@ export const listRecommendations = (token: string, plotId: string) =>
     token,
   );
 
+export async function getSatelliteOverlay(
+  token: string,
+  plotId: string,
+): Promise<{ url: string; bounds: [[number, number], [number, number]] }> {
+  let response: Response;
+  try {
+    response = await fetch(`${API}/api/v1/plots/${encodeURIComponent(plotId)}/satellite-overlay`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "L'API ne répond pas.");
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText || "Overlay indisponible");
+  }
+  const rawBounds = response.headers.get("X-Qatra-Overlay-Bounds");
+  if (!rawBounds) throw new ApiError(502, "Les limites de l'overlay sont indisponibles.");
+  let bounds: number[];
+  try {
+    bounds = JSON.parse(rawBounds);
+  } catch {
+    throw new ApiError(502, "Les limites de l'overlay sont invalides.");
+  }
+  if (bounds.length !== 4 || bounds.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+    throw new ApiError(502, "Les limites de l'overlay sont invalides.");
+  }
+  const [west, south, east, north] = bounds;
+  return {
+    url: URL.createObjectURL(await response.blob()),
+    bounds: [
+      [south, west],
+      [north, east],
+    ],
+  };
+}
+
 export const askQatra = (token: string, plotId: string, question: string) =>
   call<AskAnswer>(`/plots/${encodeURIComponent(plotId)}/ask`, {
     method: "POST",

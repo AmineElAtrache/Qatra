@@ -8,10 +8,13 @@ interactive login.  Shared-contract fields are exposed by
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -114,6 +117,7 @@ async def fetch_indices(
     client: SceneClient | None = None,
     radar_client: SceneClient | None = None,
     generate_overlay: bool = True,
+    plot_id: str | None = None,
 ) -> SatelliteObservation:
     """Fetch the best optical observation, with radar/offline fallbacks."""
     try:
@@ -139,7 +143,14 @@ async def fetch_indices(
             optical = missing_optical("satellite_api_unavailable")
     else:
         try:
-            optical = await asyncio.to_thread(_observe_earth_engine, geometry, start, end, generate_overlay)
+            optical = await asyncio.to_thread(
+                _observe_earth_engine,
+                geometry,
+                start,
+                end,
+                generate_overlay,
+                plot_id or _plot_identifier(geojson),
+            )
         except SatelliteServiceError as exc:
             logger.warning("Earth Engine unavailable: %s", exc)
             optical = missing_optical(str(exc))
@@ -147,8 +158,10 @@ async def fetch_indices(
             logger.warning("Earth Engine request failed: %s", type(exc).__name__)
             optical = missing_optical("satellite_api_unavailable")
 
-    if optical.valid_pixel_pct is not None and optical.valid_pixel_pct >= MIN_VALID_PIXEL_PCT:
+    if _optical_is_usable(optical):
         return optical
+
+    optical_rejection_reason = _optical_rejection_reason(optical)
 
     if radar_client is not None:
         try:
@@ -163,15 +176,15 @@ async def fetch_indices(
     else:
         radar = _observe_sentinel1(geometry, start, end)
     if radar is not None:
-        radar.reason = "optical_cloudy_or_unavailable"
+        radar.reason = optical_rejection_reason
         radar.radar_fallback = True
         radar.quality = "radar_fallback"
-        if radar.valid_pixel_pct is None:
-            radar.valid_pixel_pct = optical.valid_pixel_pct
         radar.quality_details = {
             **optical.quality_details,
             **radar.quality_details,
+            "optical_rejection_reason": optical_rejection_reason,
             "optical_valid_pixel_pct": optical.valid_pixel_pct,
+            "optical_quality": optical.quality,
         }
         return radar
     if optical.valid_pixel_pct is not None and optical.valid_pixel_pct < MIN_VALID_PIXEL_PCT:
@@ -189,7 +202,10 @@ async def fetch_indices(
                 "optical_valid_pixel_pct": optical.valid_pixel_pct,
             },
         )
-    optical.reason = optical.reason or "no_usable_optical_or_radar_scene"
+    if optical.reason is None:
+        optical.reason = "no_sentinel1_scene" if optical_rejection_reason != "no_sentinel2_scene" else optical_rejection_reason
+    if not optical.quality:
+        optical.quality = "incomplete_optical"
     return optical
 
 
@@ -202,18 +218,59 @@ def missing_optical(reason: str = "no_scene") -> SatelliteObservation:
     return SatelliteObservation(None, None, None, None, None, "missing", reason=reason)
 
 
+def _optical_is_usable(observation: SatelliteObservation) -> bool:
+    """Return whether optical data is complete enough to skip radar fallback."""
+    if observation.satellite_source not in {"sentinel-2", "offline"}:
+        return False
+    if observation.valid_pixel_pct is None or observation.valid_pixel_pct < MIN_VALID_PIXEL_PCT:
+        return False
+    if observation.ndvi is None or observation.ndwi is None:
+        return False
+    return observation.quality not in {None, "", "missing", "low_valid_pixels", "incomplete_optical"}
+
+
+def _optical_rejection_reason(observation: SatelliteObservation) -> str:
+    if observation.reason:
+        return observation.reason
+    if observation.satellite_source not in {"sentinel-2", "offline"} or observation.ndvi_observed_at is None:
+        return "no_sentinel2_scene"
+    if observation.valid_pixel_pct is None:
+        return "optical_valid_pixel_pct_missing"
+    if observation.valid_pixel_pct < MIN_VALID_PIXEL_PCT:
+        return "optical_low_valid_pixels"
+    if observation.ndvi is None or observation.ndwi is None:
+        return "optical_indices_incomplete"
+    if not observation.quality or observation.quality == "missing":
+        return "optical_quality_missing"
+    return "optical_unusable"
+
+
 def maybe_sentinel1_fallback(optical: SatelliteObservation, radar: SatelliteObservation | None = None) -> SatelliteObservation:
     """Compatibility helper: never labels an absent radar scene as success."""
-    if optical.satellite_source == "sentinel-1" or (optical.valid_pixel_pct is not None and optical.valid_pixel_pct >= MIN_VALID_PIXEL_PCT):
+    if optical.satellite_source == "sentinel-1" or _optical_is_usable(optical):
         return optical
     if radar is not None and radar.satellite_source == "sentinel-1" and radar.ndvi is None:
         radar.radar_fallback = True
         radar.quality = "radar_fallback"
+        radar.reason = _optical_rejection_reason(optical)
+        radar.quality_details = {
+            **optical.quality_details,
+            **radar.quality_details,
+            "optical_rejection_reason": radar.reason,
+            "optical_valid_pixel_pct": optical.valid_pixel_pct,
+            "optical_quality": optical.quality,
+        }
         return radar
     return optical
 
 
-def _observe_earth_engine(geometry: BaseGeometry, start: date, end: date, generate_overlay: bool) -> SatelliteObservation:
+def _observe_earth_engine(
+    geometry: BaseGeometry,
+    start: date,
+    end: date,
+    generate_overlay: bool,
+    plot_id: str | None = None,
+) -> SatelliteObservation:
     try:
         import ee  # type: ignore
     except ImportError as exc:
@@ -250,6 +307,7 @@ def _observe_earth_engine(geometry: BaseGeometry, start: date, end: date, genera
         valid_pct = round(float(stats.get("valid", 0.0)) * 100.0, 2) if stats.get("valid") is not None else None
         props = image.getInfo().get("properties", {})
         observed = _timestamp_to_date(props.get("system:time_start"))
+        scene_id = _scene_identifier(props)
         observation = SatelliteObservation(
             ndvi=_region_mean(ndvi, region, ee), ndwi=_region_mean(ndwi, region, ee),
             ndvi_observed_at=observed, valid_pixel_pct=valid_pct,
@@ -258,7 +316,15 @@ def _observe_earth_engine(geometry: BaseGeometry, start: date, end: date, genera
             quality_details={"collection": OPTICAL_COLLECTION, "cloud_mask": "SCL", "ndwi_formula": "gao"},
         )
         if generate_overlay and observed:
-            observation.vigor_map_path = _render_overlay(ndvi, region, observed, ee)
+            observation.vigor_map_path = _render_overlay(
+                ndvi,
+                region,
+                observed,
+                ee,
+                plot_id=plot_id,
+                scene_id=scene_id,
+                geometry_digest=_geometry_digest(geometry),
+            )
         return observation
     except EarthEngineUnavailable:
         raise
@@ -323,18 +389,115 @@ def _initialize_ee(ee: Any, project: str, credentials_path: str) -> None:
         raise EarthEngineUnavailable("earth_engine_authentication_failed") from exc
 
 
-def _render_overlay(ndvi: Any, region: Any, observed: str, ee: Any) -> str | None:
+def _render_overlay(
+    ndvi: Any,
+    region: Any,
+    observed: str,
+    ee: Any,
+    *,
+    plot_id: str | None = None,
+    scene_id: str | None = None,
+    geometry_digest: str | None = None,
+) -> str | None:
     from app.core.config import settings
+
     output_dir = Path(settings.satellite_overlay_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output = output_dir / f"ndvi_{observed}.png"
+    output = output_dir / f"{_overlay_filename(observed, plot_id=plot_id, scene_id=scene_id, geometry_digest=geometry_digest)}.png"
+    temporary_path: Path | None = None
     try:
-        url = ndvi.visualize(min=-1, max=1, palette=["#440154", "#21918c", "#fde725"], forceRgbOutput=True).getThumbURL({"region": region, "dimensions": 1024, "format": "png"})
-        urllib.request.urlretrieve(url, output)
+        # clip() is important: region controls the thumbnail viewport, but does
+        # not by itself mask pixels outside the parcel. Existing cloud/no-data
+        # masks are preserved by clip() and therefore remain transparent in PNG.
+        clipped_ndvi = ndvi.clip(region)
+        url = clipped_ndvi.visualize(
+            min=-1,
+            max=1,
+            palette=["#440154", "#21918c", "#fde725"],
+            forceRgbOutput=True,
+        ).getThumbURL({"region": region, "dimensions": 1024, "format": "png"})
+        # A UUID staging name avoids collisions between workers. The final
+        # replace is atomic on the same filesystem.
+        temporary_path = output_dir / f".{output.name}.{uuid.uuid4().hex}.tmp"
+        urllib.request.urlretrieve(url, str(temporary_path))
+        os.replace(temporary_path, output)
+        temporary_path = None
         return str(output)
     except Exception as exc:
         logger.warning("NDVI overlay generation failed: %s", type(exc).__name__)
         return None
+    finally:
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+
+
+def _plot_identifier(geojson: Mapping[str, Any] | BaseGeometry | None) -> str | None:
+    if not isinstance(geojson, Mapping):
+        return None
+    properties = geojson.get("properties")
+    if isinstance(properties, Mapping):
+        value = properties.get("plot_id") or properties.get("public_id") or properties.get("id")
+        return str(value) if value is not None else None
+    return None
+
+
+def _scene_identifier(properties: Mapping[str, Any]) -> str | None:
+    for key in ("PRODUCT_ID", "system:index", "system:id"):
+        value = properties.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _safe_filename_token(value: str | None, fallback: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9._-]+", "-", value or "").strip("-._")
+    return token or fallback
+
+
+def _overlay_filename(
+    observed: str,
+    *,
+    plot_id: str | None = None,
+    scene_id: str | None = None,
+    geometry_digest: str | None = None,
+) -> str:
+    """Return a deterministic filename that is unique per plot/scene."""
+    geometry_token = _safe_filename_token(geometry_digest, "unknown-geometry")
+    scene_digest = hashlib.sha256((scene_id or "unknown-scene").encode("utf-8")).hexdigest()[:12]
+    plot_token = _safe_filename_token(plot_id, "plot")
+    return f"ndvi_{plot_token}_{geometry_token}_{_safe_filename_token(observed, 'unknown-date')}_{scene_digest}"
+
+
+def _geometry_digest(geometry: BaseGeometry) -> str:
+    payload = json.dumps(geometry.__geo_interface__, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def find_overlay_path(
+    *,
+    plot_id: str,
+    geometry: BaseGeometry,
+    observed: str,
+    directory: str | Path,
+) -> Path | None:
+    """Resolve an overlay only from trusted plot metadata and a fixed directory."""
+    root = Path(directory).resolve()
+    if not root.is_dir():
+        return None
+    prefix = (
+        f"ndvi_{_safe_filename_token(plot_id, 'plot')}_"
+        f"{_geometry_digest(geometry)}_{_safe_filename_token(observed, 'unknown-date')}_"
+    )
+    for candidate in sorted(root.glob(f"{prefix}*.png"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            if candidate.is_file() and candidate.resolve().parent == root:
+                return candidate
+        except OSError:
+            continue
+    return None
 
 
 def _region_mean(image: Any, region: Any, ee: Any) -> float | None:
