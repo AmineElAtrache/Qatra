@@ -286,3 +286,169 @@ def test_fetch_weather_live_path_with_mock():
     obs = asyncio.run(run())
     assert obs.et0_source == "penman_monteith"
     assert obs.fetched_at is not None
+
+
+# --- Week 5: explainable fungal risk ------------------------------------------
+
+from datetime import date, datetime, timezone  # noqa: E402
+
+from app.services.agronomy_service import (  # noqa: E402
+    fungal_factors,
+    replay_input,
+    season_start,
+    season_totals,
+)
+
+
+def test_fungal_factors_say_why():
+    assert fungal_factors(humidity_pct=88, temperature_c=20, rain_mm=5) == [
+        "humid_air",
+        "mild_temperature",
+        "rain_wets_leaves",
+    ]
+    assert fungal_factors(humidity_pct=45, temperature_c=28, rain_mm=1.5) == ["mild_temperature"]
+    assert fungal_factors(humidity_pct=None, temperature_c=20, rain_mm=5) is None
+
+
+def test_fungal_risk_matches_its_factors():
+    out = run_agronomy(AgronomyInput(**{**MA001, "humidity_pct": 88, "temperature_c": 20, "effective_rain_mm": 5}))
+    assert out.fungal_risk == "high"
+    assert out.fungal_factors == ["humid_air", "mild_temperature", "rain_wets_leaves"]
+    assert "fungal_risk_high" in out.reasons
+
+
+def test_fungal_unknown_without_humidity():
+    out = run_agronomy(AgronomyInput(**MA001))
+    assert out.fungal_risk is None
+    assert out.fungal_factors is None
+
+
+# --- Week 5: replay -------------------------------------------------------------
+
+
+def _stored(inp: AgronomyInput) -> dict:
+    """What the orchestrator stores for the agronomy part of a payload."""
+    out = run_agronomy(inp)
+    return {
+        "stage": inp.stage,
+        "irrigation_method": inp.irrigation_method,
+        "area_ha": inp.area_ha,
+        "et0_mm_day": inp.et0_mm_day,
+        "effective_rain_mm": inp.effective_rain_mm,
+        "wind_kmh": inp.wind_kmh,
+        "humidity_pct": inp.humidity_pct,
+        "temperature_c": inp.temperature_c,
+        "etc_mm": out.etc_mm,
+        "gross_irrigation_mm": out.gross_irrigation_mm,
+        "spray_blocked": out.spray_blocked,
+        "fungal_risk": out.fungal_risk,
+    }
+
+
+def test_replay_gives_same_result():
+    day = AgronomyInput(**{**MA001, "humidity_pct": 82, "temperature_c": 19})
+    stored = _stored(day)
+    again = run_agronomy(replay_input(stored))
+    assert again.etc_mm == stored["etc_mm"] == 3.15
+    assert again.gross_irrigation_mm == stored["gross_irrigation_mm"]
+    assert again.spray_blocked == stored["spray_blocked"]
+    assert again.fungal_risk == stored["fungal_risk"] == "medium"
+
+
+def test_replay_of_contract_sample_keeps_etc_315():
+    import json
+    from pathlib import Path
+
+    contract = Path(__file__).resolve().parents[2] / "docs" / "contract.json"
+    payload = json.loads(contract.read_text(encoding="utf-8"))
+    assert run_agronomy(replay_input(payload)).etc_mm == 3.15
+
+
+def test_replay_keeps_missing_inputs_missing():
+    again = run_agronomy(replay_input({"stage": "fruit_growth", "irrigation_method": "drip"}))
+    assert again.etc_mm is None
+    assert again.gross_irrigation_mm is None
+
+
+# --- Week 5: season totals (campaign from 1 September) ----------------------------
+
+
+def _day(etc, rain, dose, status="show_dose"):
+    return {"etc_mm": etc, "effective_rain_mm": rain, "status": status, "display_dose": dose}
+
+
+def test_season_starts_on_1_september():
+    assert season_start(date(2026, 11, 4)) == date(2026, 9, 1)
+    assert season_start(date(2026, 9, 1)) == date(2026, 9, 1)
+    assert season_start(date(2026, 8, 31)) == date(2025, 9, 1)
+    assert season_start(date(2027, 1, 15)) == date(2026, 9, 1)
+
+
+def test_season_totals_add_up():
+    records = [
+        ("2026-11-01", _day(2.0, 0.0, 2.2)),
+        ("2026-11-02", _day(1.8, 1.5, 0.3)),
+        ("2026-11-03", _day(2.1, 0.0, 2.3)),
+    ]
+    s = season_totals(records, today=date(2026, 11, 4), area_ha=1.2)
+    assert s.season_start == "2026-09-01"
+    assert s.days_counted == 3
+    assert s.etc_mm == 5.9
+    assert s.rain_mm == 1.5
+    assert s.water_advised_mm == 4.8
+    assert s.water_advised_m3 == 57.6  # 4.8 mm × 1.2 ha × 10
+
+
+def test_season_counts_one_calculation_per_day():
+    records = [
+        (datetime(2026, 11, 2, 8, tzinfo=timezone.utc), _day(9.0, 0.0, 9.0)),
+        (datetime(2026, 11, 2, 10, tzinfo=timezone.utc), _day(1.8, 1.5, 0.3)),
+    ]
+    s = season_totals(records, today=date(2026, 11, 4), area_ha=1.0)
+    assert s.days_counted == 1
+    assert s.etc_mm == 1.8
+    assert s.water_advised_mm == 0.3
+
+
+def test_season_ignores_previous_season_and_future():
+    records = [
+        ("2026-08-31", _day(50.0, 0.0, 50.0)),  # last day of 2025-26 campaign
+        ("2026-09-01", _day(3.0, 0.0, 3.3)),
+        ("2026-11-05", _day(50.0, 0.0, 50.0)),  # after today
+    ]
+    s = season_totals(records, today=date(2026, 11, 4), area_ha=1.0)
+    assert s.days_counted == 1
+    assert s.etc_mm == 3.0
+
+
+def test_season_needs_check_days_add_no_water():
+    records = [
+        ("2026-11-01", _day(2.0, 0.0, 2.2)),
+        ("2026-11-02", _day(1.8, 0.0, None, status="needs_check")),
+    ]
+    s = season_totals(records, today=date(2026, 11, 4), area_ha=1.0)
+    assert s.etc_mm == 3.8  # the need is still counted
+    assert s.water_advised_mm == 2.2  # only the dose actually shown
+
+
+def test_season_missing_etc_is_counted_not_invented():
+    records = [
+        ("2026-11-01", _day(2.0, 0.0, 2.2)),
+        ("2026-11-02", _day(None, None, None, status="needs_check")),
+    ]
+    s = season_totals(records, today=date(2026, 11, 4), area_ha=1.0)
+    assert s.days_counted == 2
+    assert s.days_missing_etc == 1
+    assert s.etc_mm == 2.0
+
+
+def test_season_without_data_stays_null():
+    s = season_totals([], today=date(2026, 11, 4), area_ha=1.2)
+    assert s.days_counted == 0
+    assert (s.etc_mm, s.rain_mm, s.water_advised_mm, s.water_advised_m3) == (None, None, None, None)
+
+
+def test_season_without_area_has_no_m3():
+    s = season_totals([("2026-11-01", _day(2.0, 0.0, 2.2))], today=date(2026, 11, 4), area_ha=None)
+    assert s.water_advised_mm == 2.2
+    assert s.water_advised_m3 is None
