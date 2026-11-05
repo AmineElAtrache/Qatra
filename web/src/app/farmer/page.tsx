@@ -16,7 +16,7 @@ import RequireRole from "@/components/ui/RequireRole";
 import StatusBadge from "@/components/ui/StatusBadge";
 import TodayCard from "@/components/farmer/TodayCard";
 import PlotForm from "@/components/farmer/PlotForm";
-import { ApiError, createPlot, listPlots, listRecommendations, runRecommendation } from "@/lib/api";
+import { ApiError, createPlot, getSatelliteOverlay, listPlots, listRecommendations, runRecommendation } from "@/lib/api";
 import { closeRing, ringAreaHa } from "@/lib/geo";
 import { fmtDate, fmtMm, methodLabel, stageLabel } from "@/lib/labels";
 import { loadRings, saveRing, useSession } from "@/lib/session";
@@ -46,6 +46,10 @@ function Workspace({ session }: { session: Session }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [satelliteOverlay, setSatelliteOverlay] = useState<{
+    url: string;
+    bounds: [[number, number], [number, number]];
+  } | null>(null);
 
   const [drawing, setDrawing] = useState(false);
   const [draft, setDraft] = useState<number[][]>([]);
@@ -75,7 +79,8 @@ function Workspace({ session }: { session: Session }) {
         list.map(async (p) => [p.public_id, await listRecommendations(session.token, p.public_id).catch(() => [])] as const),
       );
       setHistory(Object.fromEntries(entries));
-      setSelected((cur) => cur ?? list[0]?.public_id ?? null);
+      const demoPlot = list.find((plot) => plot.public_id === "MA-001");
+      setSelected((cur) => cur ?? demoPlot?.public_id ?? list[0]?.public_id ?? null);
     } catch (e) {
       handleError(e, setError);
     } finally {
@@ -93,13 +98,38 @@ function Workspace({ session }: { session: Session }) {
         id: p.public_id,
         ring: p.coordinates?.[0] ?? rings[p.public_id] ?? null,
         status: (history[p.public_id]?.[0]?.payload.status ?? null) as Recommendation["status"] | null,
+        overlayUrl: p.public_id === selected ? satelliteOverlay?.url : null,
+        overlayBounds: p.public_id === selected ? satelliteOverlay?.bounds : null,
       })),
-    [plots, rings, history],
+    [plots, rings, history, selected, satelliteOverlay],
   );
 
   const current = plots.find((p) => p.public_id === selected) ?? null;
   const rows = selected ? history[selected] ?? [] : [];
   const latest = rows[0]?.payload ?? null;
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    setSatelliteOverlay(null);
+    if (!selected || !rows[0]) return;
+
+    getSatelliteOverlay(session.token, selected)
+      .then((overlay) => {
+        objectUrl = overlay.url;
+        if (active) setSatelliteOverlay(overlay);
+        else URL.revokeObjectURL(overlay.url);
+      })
+      .catch((error) => {
+        if (active && error instanceof ApiError && error.status === 401) signOut();
+        // A missing overlay is valid when imagery was unavailable.
+      });
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [rows[0]?.id, selected, session.token, signOut]);
 
   async function run() {
     if (!current) return;

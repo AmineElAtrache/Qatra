@@ -1,9 +1,12 @@
 """Satellite seat tests; all tests are offline and use injected adapters."""
 
 import asyncio
+import struct
+import zlib
 from datetime import date
 from pathlib import Path
 
+from app.core.config import settings
 from app.services import satellite_service as sat
 
 
@@ -67,6 +70,72 @@ def test_exactly_70_percent_keeps_optical_indices_without_radar_call():
     assert radar_client.calls == []
 
 
+def test_85_percent_valid_optical_indices_skip_radar():
+    optical = FakeClient(sat.SatelliteObservation(0.5, 0.2, "2026-10-20", 85, "sentinel-2", "good"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    assert result.satellite_source == "sentinel-2"
+    assert result.ndvi == 0.5
+    assert radar.calls == []
+
+
+def test_45_percent_valid_pixels_uses_real_sentinel1_without_optical_percentage():
+    optical = FakeClient(sat.SatelliteObservation(0.5, 0.2, "2026-10-20", 45, "sentinel-2", "low_valid_pixels"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    assert result.satellite_source == "sentinel-1"
+    assert result.radar_fallback is True
+    assert result.ndvi is None and result.ndwi is None
+    assert result.ndvi_observed_at == "2026-10-21"
+    assert result.valid_pixel_pct is None
+    assert result.reason == "optical_low_valid_pixels"
+    assert result.quality_details["optical_valid_pixel_pct"] == 45
+
+
+def test_null_ndvi_at_85_percent_attempts_sentinel1():
+    optical = FakeClient(sat.SatelliteObservation(None, 0.2, "2026-10-20", 85, "sentinel-2", "good"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    assert result.satellite_source == "sentinel-1"
+    assert result.reason == "optical_indices_incomplete"
+    assert radar.calls
+
+
+def test_null_ndwi_at_85_percent_attempts_sentinel1():
+    optical = FakeClient(sat.SatelliteObservation(0.5, None, "2026-10-20", 85, "sentinel-2", "good"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    assert result.satellite_source == "sentinel-1"
+    assert result.ndvi is None and result.ndwi is None
+    assert result.reason == "optical_indices_incomplete"
+
+
+def test_missing_optical_scene_attempts_sentinel1_and_preserves_nulls():
+    optical = FakeClient(sat.missing_optical("no_sentinel2_scene"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    assert result.satellite_source == "sentinel-1"
+    assert result.ndvi is None and result.ndwi is None
+    assert result.ndvi_observed_at == "2026-10-21"
+    assert result.reason == "no_sentinel2_scene"
+
+
+def test_missing_optical_quality_attempts_sentinel1():
+    optical = FakeClient(sat.SatelliteObservation(0.5, 0.2, "2026-10-20", 85, "sentinel-2", ""))
+    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    assert result.satellite_source == "sentinel-1"
+    assert result.reason == "optical_quality_missing"
+
+
+def test_no_sentinel1_scene_keeps_null_optical_values():
+    optical = FakeClient(sat.SatelliteObservation(None, None, "2026-10-20", 85, "sentinel-2", "good"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical))
+    assert result.satellite_source == "sentinel-2"
+    assert result.ndvi is None and result.ndwi is None
+    assert result.reason == "no_sentinel1_scene"
+
+
 def test_sentinel1_is_used_only_when_a_scene_exists(monkeypatch):
     optical = sat.SatelliteObservation(None, None, None, 20, "sentinel-2", "low_valid_pixels")
     radar = sat.SatelliteObservation(None, None, "2026-10-19", None, "sentinel-1", "radar_fallback")
@@ -115,3 +184,101 @@ def test_observation_window_is_forwarded():
     _, start, end = client.calls[0]
     assert start.isoformat() == "2026-10-10"
     assert end.isoformat() == "2026-10-20"
+
+
+def _rgba_png() -> bytes:
+    """Small 2x1 PNG with one transparent and one opaque pixel."""
+    signature = b"\x89PNG\r\n\x1a\n"
+
+    def chunk(kind, payload):
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", 2, 1, 8, 6, 0, 0, 0)
+    scanline = b"\x00\x00\x00\x00\x00\xff\xff\x00\x00"
+    return signature + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(scanline)) + chunk(b"IEND", b"")
+
+
+class FakeOverlayImage:
+    def __init__(self):
+        self.clip_region = None
+        self.visualize_args = None
+
+    def clip(self, region):
+        self.clip_region = region
+        return self
+
+    def visualize(self, **kwargs):
+        self.visualize_args = kwargs
+        return self
+
+    def getThumbURL(self, params):
+        self.thumb_params = params
+        return "https://example.invalid/ndvi.png"
+
+
+def test_overlay_clips_to_polygon_and_writes_alpha_png(request, monkeypatch):
+    overlay_dir = Path("artifacts")
+    image = FakeOverlayImage()
+    monkeypatch.setattr(settings, "satellite_overlay_dir", str(overlay_dir))
+    monkeypatch.setattr(sat.urllib.request, "urlretrieve", lambda url, target: Path(target).write_bytes(_rgba_png()))
+
+    result = sat._render_overlay(
+        image,
+        "polygon-region",
+        "2026-11-01",
+        object(),
+        plot_id="MA-001",
+        scene_id="S2A_TEST_SCENE",
+        geometry_digest="geometry-a",
+    )
+
+    output = Path(result)
+    request.addfinalizer(lambda: output.unlink(missing_ok=True))
+    assert output.is_file()
+    assert image.clip_region == "polygon-region"
+    assert image.thumb_params == {"region": "polygon-region", "dimensions": 1024, "format": "png"}
+    assert image.visualize_args["forceRgbOutput"] is True
+    png = output.read_bytes()
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert struct.unpack(">I", png[16:20])[0] == 2
+    assert struct.unpack(">I", png[20:24])[0] == 1
+    assert png[25] == 6  # RGBA color type
+
+
+def test_overlay_filename_is_stable_and_distinct_per_plot_geometry_and_scene():
+    first = sat._overlay_filename(
+        "2026-11-01", plot_id="MA-001", scene_id="scene-a", geometry_digest="geometry-a"
+    )
+    same_inputs = sat._overlay_filename(
+        "2026-11-01", plot_id="MA-001", scene_id="scene-a", geometry_digest="geometry-a"
+    )
+    other_plot = sat._overlay_filename(
+        "2026-11-01", plot_id="MA-002", scene_id="scene-a", geometry_digest="geometry-b"
+    )
+    assert first == same_inputs
+    assert first != other_plot
+    assert first.endswith(".png") is False
+
+
+def test_overlay_failure_returns_null_and_cleans_temporary_file(monkeypatch):
+    overlay_dir = Path("artifacts")
+    monkeypatch.setattr(settings, "satellite_overlay_dir", str(overlay_dir))
+
+    def fail(*args):
+        raise OSError("download failed")
+
+    monkeypatch.setattr(sat.urllib.request, "urlretrieve", fail)
+    result = sat._render_overlay(
+        FakeOverlayImage(),
+        "polygon-region",
+        "2026-11-01",
+        object(),
+        plot_id="MA-001",
+        geometry_digest="geometry-a",
+    )
+    assert result is None
+    assert not any(overlay_dir.glob("ndvi_MA-001_geometry-a_2026-11-01_*.png"))
+
+
+def test_observation_bounds_remain_west_south_east_north():
+    assert tuple(sat.validate_polygon(PLOT).bounds) == (-7.5898, 33.5731, -7.5888, 33.574)
