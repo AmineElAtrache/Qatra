@@ -4,6 +4,7 @@ import {
   CalendarClock,
   CircleX,
   CloudSun,
+  Droplets,
   Leaf,
   SatelliteDish,
   ShieldAlert,
@@ -16,6 +17,7 @@ import StatusBadge from "@/components/ui/StatusBadge";
 import TextsPanel from "./TextsPanel";
 import {
   BLOCKING,
+  FUNGAL_FACTOR_LABEL,
   RISK_LABEL,
   daysSince,
   fmtDate,
@@ -34,6 +36,10 @@ export default function TodayCard({ rec, sample = false }: { rec: Recommendation
   const info = reasons.filter((r) => !BLOCKING.has(r) && r !== "ok");
   const satAge = daysSince(rec.ndvi_observed_at);
   const risk = rec.fungal_risk ?? rec.disease_risk ?? null;
+  const why = (rec.fungal_factors ?? []).map((f) => FUNGAL_FACTOR_LABEL[f] ?? f);
+  const riskText = risk
+    ? `${RISK_LABEL[risk] ?? risk}${why.length ? ` : ${why.join(", ")}` : rec.fungal_factors ? " : temps sec" : ""}`
+    : "Non évalué";
 
   return (
     <section className="panel" aria-labelledby="today-title">
@@ -122,7 +128,7 @@ export default function TodayCard({ rec, sample = false }: { rec: Recommendation
         <Fact
           icon={<ShieldAlert size={20} />}
           k="Risque fongique"
-          v={risk ? RISK_LABEL[risk] ?? risk : "Non évalué"}
+          v={riskText}
           tone={risk === "high" ? "blocked" : undefined}
         />
       </div>
@@ -137,6 +143,8 @@ export default function TodayCard({ rec, sample = false }: { rec: Recommendation
         </div>
       )}
 
+      {rec.season && rec.season.days_counted > 0 && <SeasonLine rec={rec} />}
+
       <TextsPanel rec={rec} />
 
       <p className="small muted" style={{ margin: "14px 0 0", display: "flex", alignItems: "center", gap: 6 }}>
@@ -144,6 +152,25 @@ export default function TodayCard({ rec, sample = false }: { rec: Recommendation
         Moteur {rec.engine_version ?? "—"}. Aide à la décision : vérifiez le sol avant de changer un tour d&apos;eau.
       </p>
     </section>
+  );
+}
+
+function SeasonLine({ rec }: { rec: Recommendation }) {
+  const s = rec.season!;
+  return (
+    <div className="season-line">
+      <Droplets size={18} />
+      <span>
+        <strong>Depuis le 1er septembre</strong>
+        <span className="small muted num" style={{ display: "block" }}>
+          {s.water_advised_m3 != null
+            ? `${fmtMm(s.water_advised_m3, 0)} m³ conseillés (${fmtMm(s.water_advised_mm, 1)} mm)`
+            : `${fmtMm(s.water_advised_mm, 1)} mm conseillés`}
+          {s.etc_mm != null ? `, besoin ${fmtMm(s.etc_mm, 1)} mm` : ""}
+          {s.rain_mm != null ? `, pluie ${fmtMm(s.rain_mm, 1)} mm` : ""}, sur {s.days_counted} jour(s)
+        </span>
+      </span>
+    </div>
   );
 }
 

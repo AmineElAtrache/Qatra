@@ -16,8 +16,8 @@ import RequireRole from "@/components/ui/RequireRole";
 import StatusBadge from "@/components/ui/StatusBadge";
 import TodayCard from "@/components/farmer/TodayCard";
 import PlotForm from "@/components/farmer/PlotForm";
-import { ApiError, createPlot, listPlots, listRecommendations, runRecommendation } from "@/lib/api";
-import { closeRing, ringAreaHa } from "@/lib/geo";
+import { ApiError, createPlot, listPlots, listRecommendations, pingNotifications, runRecommendation } from "@/lib/api";
+import { closeRing, ringAreaHa, ringFromFeature } from "@/lib/geo";
 import { fmtDate, fmtMm, methodLabel, stageLabel } from "@/lib/labels";
 import { loadRings, saveRing, useSession } from "@/lib/session";
 import type { Plot, Recommendation, Session } from "@/lib/types";
@@ -91,7 +91,7 @@ function Workspace({ session }: { session: Session }) {
     () =>
       plots.map((p) => ({
         id: p.public_id,
-        ring: p.coordinates?.[0] ?? rings[p.public_id] ?? null,
+        ring: ringFromFeature(p.geojson) ?? rings[p.public_id] ?? null,
         status: (history[p.public_id]?.[0]?.payload.status ?? null) as Recommendation["status"] | null,
       })),
     [plots, rings, history],
@@ -114,6 +114,7 @@ function Workspace({ session }: { session: Session }) {
         payload: out.recommendation,
       };
       setHistory((h) => ({ ...h, [current.public_id]: [row, ...(h[current.public_id] ?? [])] }));
+      pingNotifications(); // a status change may have sent a notification
     } catch (e) {
       handleError(e, setError);
     } finally {
@@ -263,7 +264,7 @@ function Workspace({ session }: { session: Session }) {
 
               {current && (
                 <>
-                  <div className="panel" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div className="panel run-bar" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                     <span style={{ flex: 1, minWidth: 180 }}>
                       <strong>{current.public_id}</strong>
                       <span className="small muted" style={{ display: "block" }}>

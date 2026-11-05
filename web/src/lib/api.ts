@@ -1,4 +1,4 @@
-import type { AdvisorPlot, AskAnswer, Plot, PlotCreate, Recommendation, Session } from "./types";
+import type { AdvisorPlot, AppNotification, AskAnswer, Plot, PlotCreate, Recommendation, Session } from "./types";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -87,3 +87,14 @@ export const askQatra = (token: string, plotId: string, question: string) =>
   }, token);
 
 export const advisorPlots = (token: string) => call<AdvisorPlot[]>("/advisor/plots", {}, token);
+
+export const listNotifications = (token: string) => call<AppNotification[]>("/notifications", {}, token);
+
+export const sendTestNotification = (token: string) =>
+  call<AppNotification>("/notifications/test", { method: "POST" }, token);
+
+/** Lets any screen ask the bell to refresh (e.g. after "Calculer aujourd'hui"). */
+export const NOTIFY_EVENT = "qatra:notifications";
+export function pingNotifications() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(NOTIFY_EVENT));
+}

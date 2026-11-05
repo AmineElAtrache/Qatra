@@ -176,6 +176,98 @@ textarea {
   }
 }
 
+/* ---------- Notifications ---------- */
+
+.bell {
+  position: relative;
+}
+
+.bell-btn {
+  position: relative;
+  width: 38px;
+  padding: 0;
+}
+
+.bell-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--drop);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+}
+
+.bell-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 1100;
+  width: min(360px, calc(100vw - 32px));
+  padding: 12px;
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 32px rgba(11, 31, 58, 0.16);
+  color: var(--ink);
+}
+
+.bell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.bell-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.bell-list li {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: var(--radius-m);
+  background: var(--sunken);
+  font-size: 0.9rem;
+}
+
+.bell-list li.unread {
+  background: var(--drop-soft);
+}
+
+.bell-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-2);
+}
+
+@media (max-width: 720px) {
+  .bell-panel {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    top: 60px;
+    width: auto;
+  }
+  .run-bar .btn {
+    width: 100%;
+  }
+}
+
 /* ---------- Building blocks ---------- */
 
 .panel {
@@ -741,6 +833,26 @@ textarea {
   .facts {
     grid-template-columns: 1fr;
   }
+}
+
+.season-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: var(--radius-m);
+  background: var(--water-soft);
+  color: #184f97;
+}
+
+.season-line svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.season-line strong {
+  color: var(--ink);
 }
 
 .texts-body {

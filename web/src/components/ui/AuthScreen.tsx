@@ -138,7 +138,8 @@ export default function AuthScreen() {
           </form>
 
           <p className="muted small" style={{ marginTop: 24 }}>
-            Compte de démonstration : <strong>demo@qatra.local</strong> / <strong>demo-demo</strong>.{" "}
+            Comptes de démonstration : <strong>farmer@example.com</strong> (agriculteur) et{" "}
+            <strong>advisor@example.com</strong> (conseiller), mot de passe <strong>demo-demo</strong>.{" "}
             <Link href="/demo" style={{ color: "var(--water)", fontWeight: 600 }}>
               Voir l&apos;exemple MA-001 sans compte
             </Link>

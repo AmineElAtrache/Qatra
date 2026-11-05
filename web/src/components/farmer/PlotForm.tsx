@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CircleAlert, Droplets, LoaderCircle, Waves, X } from "lucide-react";
 import { METHODS, STAGES } from "@/lib/labels";
+import { MAX_PLOT_HA, MIN_PLOT_HA } from "@/lib/geo";
 import type { PlotCreate } from "@/lib/types";
 
 type Props = {
@@ -19,6 +20,8 @@ export default function PlotForm({ areaHa, suggestedId, busy, error, onCancel, o
   const [stage, setStage] = useState("");
   const [method, setMethod] = useState("drip");
   const [last, setLast] = useState("");
+  const tooBig = areaHa > MAX_PLOT_HA;
+  const tooSmall = areaHa < MIN_PLOT_HA;
 
   return (
     <section className="panel" aria-labelledby="form-title">
@@ -99,6 +102,17 @@ export default function PlotForm({ areaHa, suggestedId, busy, error, onCancel, o
           />
         </div>
 
+        {(tooBig || tooSmall) && (
+          <div className="notice" role="alert" style={{ marginBottom: 14 }}>
+            <CircleAlert size={18} />
+            <span>
+              {tooBig
+                ? `Surface de ${Math.round(areaHa).toLocaleString("fr-FR")} ha : c'est une région, pas un verger. Fermez, zoomez jusqu'à voir les arbres et redessinez.`
+                : "Surface trop petite : redessinez en plaçant les coins plus loin."}
+            </span>
+          </div>
+        )}
+
         {error && (
           <div className="notice error" role="alert" style={{ marginBottom: 14 }}>
             <CircleAlert size={18} />
@@ -106,7 +120,7 @@ export default function PlotForm({ areaHa, suggestedId, busy, error, onCancel, o
           </div>
         )}
 
-        <button className="btn btn-drop" type="submit" disabled={busy || !stage || !publicId.trim()} style={{ width: "100%" }}>
+        <button className="btn btn-drop" type="submit" disabled={busy || !stage || !publicId.trim() || tooBig || tooSmall} style={{ width: "100%" }}>
           {busy && <LoaderCircle className="spin" size={18} />}
           Enregistrer la parcelle
         </button>
