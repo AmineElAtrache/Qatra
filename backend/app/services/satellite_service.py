@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
@@ -29,6 +29,8 @@ OPTICAL_COLLECTION = "COPERNICUS/S2_SR_HARMONIZED"
 RADAR_COLLECTION = "COPERNICUS/S1_GRD"
 MIN_VALID_PIXEL_PCT = 70.0
 DEFAULT_LOOKBACK_DAYS = 10
+MAX_OBSERVATION_AGE_DAYS = 10
+REQUIRED_OPTICAL_BANDS = ("B4", "B8", "B11")
 SCL_INVALID_CLASSES = frozenset({0, 1, 2, 3, 8, 9, 10, 11})
 
 
@@ -88,8 +90,19 @@ def validate_polygon(geojson: Mapping[str, Any] | BaseGeometry) -> BaseGeometry:
     return geometry
 
 
-def compute_indices(red: float, nir: float, swir: float) -> tuple[float | None, float | None]:
-    """Compute NDVI and Gao NDWI from scaled or unscaled SR values."""
+def compute_indices(
+    red: float | None,
+    nir: float | None,
+    swir: float | None,
+) -> tuple[float | None, float | None]:
+    """Compute NDVI and Gao NDWI/NDMI from scaled or unscaled SR values.
+
+    The second returned value remains the contract's ``ndwi`` field for
+    compatibility, but its formula is Gao NDWI (also commonly called NDMI):
+    ``(B08-B11)/(B08+B11)``. McFeeters NDWI is a different B03/B08 index.
+    """
+    if red is None or nir is None or swir is None:
+        return None, None
     values = (red / 10000.0, nir / 10000.0, swir / 10000.0) if max(abs(red), abs(nir), abs(swir)) > 2 else (red, nir, swir)
     red_r, nir_r, swir_r = values
     return _normalized_difference(nir_r, red_r), _normalized_difference(nir_r, swir_r)
@@ -104,6 +117,38 @@ def valid_pixel_percentage(valid_pixels: int, total_pixels: int) -> float | None
 def is_valid_scl(class_value: int) -> bool:
     """Return whether an SCL class is usable for the optical indices."""
     return class_value not in SCL_INVALID_CLASSES
+
+
+def missing_required_bands(
+    available_bands: Sequence[str],
+    required_bands: Sequence[str] = (*REQUIRED_OPTICAL_BANDS, "SCL"),
+) -> tuple[str, ...]:
+    """Return required Sentinel-2 bands absent from a scene."""
+    available = set(available_bands)
+    return tuple(band for band in required_bands if band not in available)
+
+
+def combined_valid_pixel_mask(
+    scl_values: Sequence[int | None],
+    band_valid_masks: Mapping[str, Sequence[bool]],
+) -> list[bool]:
+    """Combine SCL validity with masks for every required index band.
+
+    This pure helper mirrors the Earth Engine mask operation and makes the
+    pixel-quality rule deterministic to test without a live provider.
+    """
+    missing = missing_required_bands(tuple(band_valid_masks), REQUIRED_OPTICAL_BANDS)
+    if missing:
+        raise SatelliteServiceError(f"missing_required_bands:{','.join(missing)}")
+    lengths = {len(scl_values), *(len(band_valid_masks[band]) for band in REQUIRED_OPTICAL_BANDS)}
+    if len(lengths) != 1:
+        raise SatelliteServiceError("inconsistent_pixel_mask_lengths")
+    return [
+        scl is not None
+        and is_valid_scl(int(scl))
+        and all(band_valid_masks[band][index] for band in REQUIRED_OPTICAL_BANDS)
+        for index, scl in enumerate(scl_values)
+    ]
 
 
 async def fetch_indices(
@@ -131,7 +176,7 @@ async def fetch_indices(
         return missing_optical("invalid_date_window")
 
     if offline_dir:
-        offline = _read_offline_scene(Path(offline_dir), geometry)
+        offline = _read_offline_scene(Path(offline_dir), geometry, reference_date=end)
         if offline is not None:
             return offline
 
@@ -157,6 +202,8 @@ async def fetch_indices(
         except Exception as exc:
             logger.warning("Earth Engine request failed: %s", type(exc).__name__)
             optical = missing_optical("satellite_api_unavailable")
+
+    optical = _validate_optical_freshness(optical, reference_date=end)
 
     if _optical_is_usable(optical):
         return optical
@@ -214,8 +261,59 @@ def sample_optical() -> SatelliteObservation:
     return SatelliteObservation(0.68, 0.21, "2026-10-11", 86.0, "sentinel-2", "sample")
 
 
-def missing_optical(reason: str = "no_scene") -> SatelliteObservation:
-    return SatelliteObservation(None, None, None, None, None, "missing", reason=reason)
+def missing_optical(
+    reason: str = "no_scene",
+    *,
+    quality_details: dict[str, Any] | None = None,
+) -> SatelliteObservation:
+    return SatelliteObservation(
+        None,
+        None,
+        None,
+        None,
+        None,
+        "missing",
+        reason=reason,
+        quality_details=quality_details or {},
+    )
+
+
+def _observation_freshness(observed_at: str, reference_date: date) -> str:
+    """Classify an observation date relative to the requested analysis date."""
+    try:
+        observed = date.fromisoformat(str(observed_at)[:10])
+    except (TypeError, ValueError):
+        return "invalid"
+    age_days = (reference_date - observed).days
+    if age_days < 0:
+        return "invalid"
+    return "fresh" if age_days <= MAX_OBSERVATION_AGE_DAYS else "stale"
+
+
+def _validate_optical_freshness(
+    observation: SatelliteObservation,
+    *,
+    reference_date: date,
+) -> SatelliteObservation:
+    """Reject stale/invalid optical observations without returning their values."""
+    if observation.satellite_source not in {"sentinel-2", "offline"}:
+        return observation
+    if observation.ndvi_observed_at is None:
+        return observation
+    freshness = _observation_freshness(observation.ndvi_observed_at, reference_date)
+    if freshness == "fresh":
+        observation.quality_details = {**observation.quality_details, "freshness": freshness}
+        return observation
+    reason = "stale_observation" if freshness == "stale" else "invalid_observation_date"
+    return missing_optical(
+        reason,
+        quality_details={
+            **observation.quality_details,
+            "observed_at": observation.ndvi_observed_at,
+            "reference_date": reference_date.isoformat(),
+            "freshness": freshness,
+        },
+    )
 
 
 def _optical_is_usable(observation: SatelliteObservation) -> bool:
@@ -298,11 +396,31 @@ def _observe_earth_engine(
             return image.updateMask(mask)
 
         image = ee.Image(collection.map(mask_scl).first())
+        available_bands = tuple(str(value) for value in image.bandNames().getInfo())
+        missing_bands = missing_required_bands(available_bands)
+        if missing_bands:
+            return SatelliteObservation(
+                None,
+                None,
+                None,
+                None,
+                "sentinel-2",
+                "missing_bands",
+                reason="missing_required_bands",
+                quality_details={
+                    "collection": OPTICAL_COLLECTION,
+                    "available_bands": available_bands,
+                    "missing_bands": missing_bands,
+                },
+            )
         # Harmonized L2A SR is scaled by 10,000; convert before calculating ratios.
-        reflectance = image.select(["B4", "B8", "B11"]).divide(10000)
+        reflectance = image.select(list(REQUIRED_OPTICAL_BANDS)).divide(10000)
         ndvi = reflectance.normalizedDifference(["B8", "B4"]).rename("NDVI")
         ndwi = reflectance.normalizedDifference(["B8", "B11"]).rename("NDWI_GAO")
-        valid = ndvi.mask().reduce(ee.Reducer.min()).rename("valid")
+        # The SCL mask is already applied to the image. Reducing the masks of
+        # all required bands prevents a missing SWIR pixel from being counted
+        # as valid merely because B04/B08 were usable.
+        valid = image.select(list(REQUIRED_OPTICAL_BANDS)).mask().reduce(ee.Reducer.min()).rename("valid")
         stats = valid.reduceRegion(ee.Reducer.mean(), region, 10, maxPixels=1_000_000, bestEffort=True).getInfo()
         valid_pct = round(float(stats.get("valid", 0.0)) * 100.0, 2) if stats.get("valid") is not None else None
         props = image.getInfo().get("properties", {})
@@ -313,7 +431,13 @@ def _observe_earth_engine(
             ndvi_observed_at=observed, valid_pixel_pct=valid_pct,
             satellite_source="sentinel-2", quality="good" if valid_pct is not None and valid_pct >= MIN_VALID_PIXEL_PCT else "low_valid_pixels",
             bounds=tuple(float(v) for v in geometry.bounds),
-            quality_details={"collection": OPTICAL_COLLECTION, "cloud_mask": "SCL", "ndwi_formula": "gao"},
+            quality_details={
+                "collection": OPTICAL_COLLECTION,
+                "cloud_mask": "SCL",
+                "required_bands": REQUIRED_OPTICAL_BANDS,
+                "ndvi_formula": "(B08-B04)/(B08+B04)",
+                "ndwi_formula": "gao_ndwi_ndmi:(B08-B11)/(B08+B11)",
+            },
         )
         if generate_overlay and observed:
             observation.vigor_map_path = _render_overlay(
@@ -350,9 +474,15 @@ def _observe_sentinel1(geometry: BaseGeometry, start: date, end: date) -> Satell
         return None
 
 
-def _read_offline_scene(directory: Path, geometry: BaseGeometry) -> SatelliteObservation | None:
+def _read_offline_scene(
+    directory: Path,
+    geometry: BaseGeometry,
+    *,
+    reference_date: date,
+) -> SatelliteObservation | None:
     if not directory.is_dir():
         return None
+    stale_observations: list[str] = []
     for manifest in sorted(directory.glob("*.json")):
         try:
             data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -374,9 +504,20 @@ def _read_offline_scene(directory: Path, geometry: BaseGeometry) -> SatelliteObs
                     continue
             if not data.get("observed_at") or data.get("ndvi") is None or data.get("valid_pixel_pct") is None:
                 continue
-            return SatelliteObservation(float(data["ndvi"]), _optional_float(data.get("ndwi")), str(data["observed_at"])[:10], float(data["valid_pixel_pct"]), "sentinel-2", "offline", vigor_map_path=data.get("vigor_map_path"), bounds=tuple(scene_bounds) if scene_bounds else tuple(float(v) for v in geometry.bounds), quality_details={"manifest": str(manifest)})
+            observed_at = str(data["observed_at"])
+            freshness = _observation_freshness(observed_at, reference_date)
+            if freshness != "fresh":
+                if freshness == "stale":
+                    stale_observations.append(observed_at[:10])
+                continue
+            return SatelliteObservation(float(data["ndvi"]), _optional_float(data.get("ndwi")), observed_at[:10], float(data["valid_pixel_pct"]), "sentinel-2", "offline", vigor_map_path=data.get("vigor_map_path"), bounds=tuple(scene_bounds) if scene_bounds else tuple(float(v) for v in geometry.bounds), quality_details={"manifest": str(manifest), "freshness": "fresh"})
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             logger.warning("Ignoring invalid offline satellite manifest: %s", manifest.name)
+    if stale_observations:
+        return missing_optical(
+            "stale_offline_scene",
+            quality_details={"stale_observed_at": sorted(stale_observations)},
+        )
     return None
 
 

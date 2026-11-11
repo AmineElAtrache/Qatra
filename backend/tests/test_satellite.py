@@ -3,7 +3,7 @@
 import asyncio
 import struct
 import zlib
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from app.core.config import settings
@@ -17,6 +17,9 @@ PLOT = {
         "coordinates": [[[-7.5898, 33.5731], [-7.5888, 33.5731], [-7.5888, 33.5740], [-7.5898, 33.5740], [-7.5898, 33.5731]]],
     },
 }
+FRESH_DATE = date.today()
+FRESH_OBSERVED = FRESH_DATE.isoformat()
+FRESH_RADAR_OBSERVED = (FRESH_DATE - timedelta(days=1)).isoformat()
 
 
 class FakeClient:
@@ -44,6 +47,30 @@ def test_ndvi_ndwi_use_scaled_surface_reflectance():
     ndvi, ndwi = sat.compute_indices(2000, 6000, 3000)
     assert ndvi == 0.5
     assert ndwi == 0.333333
+    assert sat.compute_indices(2000, 6000, None) == (None, None)
+
+
+def test_combined_mask_requires_scl_and_all_index_bands():
+    mask = sat.combined_valid_pixel_mask(
+        [4, 3, 5, None],
+        {
+            "B4": [True, True, True, True],
+            "B8": [True, True, False, True],
+            "B11": [True, True, True, True],
+        },
+    )
+    assert mask == [True, False, False, False]
+
+
+def test_missing_required_band_is_diagnostic():
+    missing = sat.missing_required_bands(("B4", "B8", "SCL"))
+    assert missing == ("B11",)
+    try:
+        sat.combined_valid_pixel_mask([4], {"B4": [True], "B8": [True]})
+    except sat.SatelliteServiceError as exc:
+        assert str(exc) == "missing_required_bands:B11"
+    else:
+        raise AssertionError("missing required band was not rejected")
 
 
 def test_valid_pixel_percentage_and_scl_quality_threshold():
@@ -52,8 +79,8 @@ def test_valid_pixel_percentage_and_scl_quality_threshold():
     assert sat.is_valid_scl(9) is False
     assert sat.valid_pixel_percentage(70, 100) == 70.0
     assert sat.valid_pixel_percentage(69, 100) == 69.0
-    client = FakeClient(sat.SatelliteObservation(0.5, 0.2, "2026-10-20", 69, "sentinel-2", "low_valid_pixels"))
-    result = run(sat.fetch_indices(geojson=PLOT, client=client))
+    client = FakeClient(sat.SatelliteObservation(0.5, 0.2, FRESH_OBSERVED, 69, "sentinel-2", "low_valid_pixels"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=client, analysis_date=FRESH_DATE))
     assert result.ndvi is None
     assert result.ndwi is None
     assert result.radar_fallback is False
@@ -62,49 +89,49 @@ def test_valid_pixel_percentage_and_scl_quality_threshold():
 
 
 def test_exactly_70_percent_keeps_optical_indices_without_radar_call():
-    client = FakeClient(sat.SatelliteObservation(0.5, 0.2, "2026-10-20", 70, "sentinel-2", "good"))
-    radar_client = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
-    result = run(sat.fetch_indices(geojson=PLOT, client=client, radar_client=radar_client))
+    client = FakeClient(sat.SatelliteObservation(0.5, 0.2, FRESH_OBSERVED, 70, "sentinel-2", "good"))
+    radar_client = FakeClient(sat.SatelliteObservation(None, None, FRESH_RADAR_OBSERVED, None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=client, radar_client=radar_client, analysis_date=FRESH_DATE))
     assert result.ndvi == 0.5
     assert result.radar_fallback is False
     assert radar_client.calls == []
 
 
 def test_85_percent_valid_optical_indices_skip_radar():
-    optical = FakeClient(sat.SatelliteObservation(0.5, 0.2, "2026-10-20", 85, "sentinel-2", "good"))
-    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
-    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    optical = FakeClient(sat.SatelliteObservation(0.5, 0.2, FRESH_OBSERVED, 85, "sentinel-2", "good"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, FRESH_RADAR_OBSERVED, None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar, analysis_date=FRESH_DATE))
     assert result.satellite_source == "sentinel-2"
     assert result.ndvi == 0.5
     assert radar.calls == []
 
 
 def test_45_percent_valid_pixels_uses_real_sentinel1_without_optical_percentage():
-    optical = FakeClient(sat.SatelliteObservation(0.5, 0.2, "2026-10-20", 45, "sentinel-2", "low_valid_pixels"))
-    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
-    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    optical = FakeClient(sat.SatelliteObservation(0.5, 0.2, FRESH_OBSERVED, 45, "sentinel-2", "low_valid_pixels"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, FRESH_RADAR_OBSERVED, None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar, analysis_date=FRESH_DATE))
     assert result.satellite_source == "sentinel-1"
     assert result.radar_fallback is True
     assert result.ndvi is None and result.ndwi is None
-    assert result.ndvi_observed_at == "2026-10-21"
+    assert result.ndvi_observed_at == FRESH_RADAR_OBSERVED
     assert result.valid_pixel_pct is None
     assert result.reason == "optical_low_valid_pixels"
     assert result.quality_details["optical_valid_pixel_pct"] == 45
 
 
 def test_null_ndvi_at_85_percent_attempts_sentinel1():
-    optical = FakeClient(sat.SatelliteObservation(None, 0.2, "2026-10-20", 85, "sentinel-2", "good"))
-    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
-    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    optical = FakeClient(sat.SatelliteObservation(None, 0.2, FRESH_OBSERVED, 85, "sentinel-2", "good"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, FRESH_RADAR_OBSERVED, None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar, analysis_date=FRESH_DATE))
     assert result.satellite_source == "sentinel-1"
     assert result.reason == "optical_indices_incomplete"
     assert radar.calls
 
 
 def test_null_ndwi_at_85_percent_attempts_sentinel1():
-    optical = FakeClient(sat.SatelliteObservation(0.5, None, "2026-10-20", 85, "sentinel-2", "good"))
-    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
-    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    optical = FakeClient(sat.SatelliteObservation(0.5, None, FRESH_OBSERVED, 85, "sentinel-2", "good"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, FRESH_RADAR_OBSERVED, None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar, analysis_date=FRESH_DATE))
     assert result.satellite_source == "sentinel-1"
     assert result.ndvi is None and result.ndwi is None
     assert result.reason == "optical_indices_incomplete"
@@ -112,25 +139,25 @@ def test_null_ndwi_at_85_percent_attempts_sentinel1():
 
 def test_missing_optical_scene_attempts_sentinel1_and_preserves_nulls():
     optical = FakeClient(sat.missing_optical("no_sentinel2_scene"))
-    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
+    radar = FakeClient(sat.SatelliteObservation(None, None, FRESH_RADAR_OBSERVED, None, "sentinel-1", "radar_fallback"))
     result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
     assert result.satellite_source == "sentinel-1"
     assert result.ndvi is None and result.ndwi is None
-    assert result.ndvi_observed_at == "2026-10-21"
+    assert result.ndvi_observed_at == FRESH_RADAR_OBSERVED
     assert result.reason == "no_sentinel2_scene"
 
 
 def test_missing_optical_quality_attempts_sentinel1():
-    optical = FakeClient(sat.SatelliteObservation(0.5, 0.2, "2026-10-20", 85, "sentinel-2", ""))
-    radar = FakeClient(sat.SatelliteObservation(None, None, "2026-10-21", None, "sentinel-1", "radar_fallback"))
-    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar))
+    optical = FakeClient(sat.SatelliteObservation(0.5, 0.2, FRESH_OBSERVED, 85, "sentinel-2", ""))
+    radar = FakeClient(sat.SatelliteObservation(None, None, FRESH_RADAR_OBSERVED, None, "sentinel-1", "radar_fallback"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, radar_client=radar, analysis_date=FRESH_DATE))
     assert result.satellite_source == "sentinel-1"
     assert result.reason == "optical_quality_missing"
 
 
 def test_no_sentinel1_scene_keeps_null_optical_values():
-    optical = FakeClient(sat.SatelliteObservation(None, None, "2026-10-20", 85, "sentinel-2", "good"))
-    result = run(sat.fetch_indices(geojson=PLOT, client=optical))
+    optical = FakeClient(sat.SatelliteObservation(None, None, FRESH_OBSERVED, 85, "sentinel-2", "good"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=optical, analysis_date=FRESH_DATE))
     assert result.satellite_source == "sentinel-2"
     assert result.ndvi is None and result.ndwi is None
     assert result.reason == "no_sentinel1_scene"
@@ -154,7 +181,7 @@ def test_sentinel1_is_used_only_when_a_scene_exists(monkeypatch):
 
 def test_offline_scene_preserves_real_date_and_contract_fields():
     fixture_dir = Path(__file__).parent / "fixtures"
-    result = run(sat.fetch_indices(geojson=PLOT, offline_dir=fixture_dir))
+    result = run(sat.fetch_indices(geojson=PLOT, offline_dir=fixture_dir, analysis_date=date(2025, 6, 10)))
     assert result.ndvi_observed_at == "2025-06-01"
     assert result.quality == "offline"
     assert result.to_contract_dict() == {
@@ -164,6 +191,31 @@ def test_offline_scene_preserves_real_date_and_contract_fields():
         "valid_pixel_pct": 88.0,
         "satellite_source": "sentinel-2",
     }
+
+
+def test_stale_live_observation_is_rejected_without_values():
+    stale = FakeClient(sat.SatelliteObservation(0.7, 0.2, "2020-01-01", 95, "sentinel-2", "good"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=stale, analysis_date=date(2026, 1, 11)))
+    assert result.ndvi is None and result.ndwi is None
+    assert result.satellite_source is None
+    assert result.reason == "stale_observation"
+    assert result.quality_details["freshness"] == "stale"
+
+
+def test_ten_day_old_live_observation_is_still_fresh():
+    observed = date(2026, 1, 1)
+    client = FakeClient(sat.SatelliteObservation(0.7, 0.2, observed.isoformat(), 95, "sentinel-2", "good"))
+    result = run(sat.fetch_indices(geojson=PLOT, client=client, analysis_date=observed + timedelta(days=10)))
+    assert result.ndvi == 0.7
+    assert result.quality_details["freshness"] == "fresh"
+
+
+def test_stale_offline_scene_is_rejected_without_values():
+    fixture_dir = Path(__file__).parent / "fixtures"
+    result = run(sat.fetch_indices(geojson=PLOT, offline_dir=fixture_dir, analysis_date=date(2026, 1, 11)))
+    assert result.ndvi is None and result.ndwi is None
+    assert result.reason == "stale_offline_scene"
+    assert result.quality_details["stale_observed_at"] == ["2025-06-01"]
 
 
 def test_earth_engine_failure_is_controlled(monkeypatch):
