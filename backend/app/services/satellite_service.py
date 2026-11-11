@@ -32,6 +32,14 @@ DEFAULT_LOOKBACK_DAYS = 10
 MAX_OBSERVATION_AGE_DAYS = 10
 REQUIRED_OPTICAL_BANDS = ("B4", "B8", "B11")
 SCL_INVALID_CLASSES = frozenset({0, 1, 2, 3, 8, 9, 10, 11})
+OVERLAY_PALETTES = {
+    "ndvi": ("#440154", "#21918c", "#fde725"),
+    "ndmi": ("#8c510a", "#f6e8c3", "#5ab4ac", "#01665e"),
+}
+OVERLAY_FORMULAS = {
+    "ndvi": "(B08-B04)/(B08+B04)",
+    "ndmi": "gao_ndwi_ndmi:(B08-B11)/(B08+B11)",
+}
 
 
 class SatelliteServiceError(RuntimeError):
@@ -57,6 +65,7 @@ class SatelliteObservation:
     reason: str | None = None
     radar_fallback: bool = False
     vigor_map_path: str | None = None
+    ndmi_map_path: str | None = None
     bounds: tuple[float, float, float, float] | None = None
     quality_details: dict[str, Any] = field(default_factory=dict)
 
@@ -435,20 +444,48 @@ def _observe_earth_engine(
                 "collection": OPTICAL_COLLECTION,
                 "cloud_mask": "SCL",
                 "required_bands": REQUIRED_OPTICAL_BANDS,
-                "ndvi_formula": "(B08-B04)/(B08+B04)",
-                "ndwi_formula": "gao_ndwi_ndmi:(B08-B11)/(B08+B11)",
+                "ndvi_formula": OVERLAY_FORMULAS["ndvi"],
+                "ndwi_formula": OVERLAY_FORMULAS["ndmi"],
             },
         )
+        observation.quality_details["overlay_metadata"] = {
+            index_type: _overlay_metadata(index_type, observed, observation.bounds, None)
+            for index_type in ("ndvi", "ndmi")
+        }
         if generate_overlay and observed:
+            geometry_digest = _geometry_digest(geometry)
             observation.vigor_map_path = _render_overlay(
                 ndvi,
                 region,
                 observed,
                 ee,
+                index_type="ndvi",
                 plot_id=plot_id,
                 scene_id=scene_id,
-                geometry_digest=_geometry_digest(geometry),
+                geometry_digest=geometry_digest,
             )
+            observation.ndmi_map_path = _render_overlay(
+                ndwi,
+                region,
+                observed,
+                ee,
+                index_type="ndmi",
+                plot_id=plot_id,
+                scene_id=scene_id,
+                geometry_digest=geometry_digest,
+            )
+            observation.quality_details["overlay_metadata"] = {
+                index_type: _overlay_metadata(
+                    index_type,
+                    observed,
+                    observation.bounds,
+                    path,
+                )
+                for index_type, path in (
+                    ("ndvi", observation.vigor_map_path),
+                    ("ndmi", observation.ndmi_map_path),
+                )
+            }
         return observation
     except EarthEngineUnavailable:
         raise
@@ -531,30 +568,32 @@ def _initialize_ee(ee: Any, project: str, credentials_path: str) -> None:
 
 
 def _render_overlay(
-    ndvi: Any,
+    index_image: Any,
     region: Any,
     observed: str,
     ee: Any,
     *,
+    index_type: str = "ndvi",
     plot_id: str | None = None,
     scene_id: str | None = None,
     geometry_digest: str | None = None,
 ) -> str | None:
     from app.core.config import settings
 
+    index_type, palette, _ = _overlay_spec(index_type)
     output_dir = Path(settings.satellite_overlay_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output = output_dir / f"{_overlay_filename(observed, plot_id=plot_id, scene_id=scene_id, geometry_digest=geometry_digest)}.png"
+    output = output_dir / f"{_overlay_filename(observed, index_type=index_type, plot_id=plot_id, scene_id=scene_id, geometry_digest=geometry_digest)}.png"
     temporary_path: Path | None = None
     try:
         # clip() is important: region controls the thumbnail viewport, but does
         # not by itself mask pixels outside the parcel. Existing cloud/no-data
         # masks are preserved by clip() and therefore remain transparent in PNG.
-        clipped_ndvi = ndvi.clip(region)
-        url = clipped_ndvi.visualize(
+        clipped_image = index_image.clip(region)
+        url = clipped_image.visualize(
             min=-1,
             max=1,
-            palette=["#440154", "#21918c", "#fde725"],
+            palette=list(palette),
             forceRgbOutput=True,
         ).getThumbURL({"region": region, "dimensions": 1024, "format": "png"})
         # A UUID staging name avoids collisions between workers. The final
@@ -565,7 +604,7 @@ def _render_overlay(
         temporary_path = None
         return str(output)
     except Exception as exc:
-        logger.warning("NDVI overlay generation failed: %s", type(exc).__name__)
+        logger.warning("%s overlay generation failed: %s", index_type.upper(), type(exc).__name__)
         return None
     finally:
         if temporary_path:
@@ -601,15 +640,43 @@ def _safe_filename_token(value: str | None, fallback: str) -> str:
 def _overlay_filename(
     observed: str,
     *,
+    index_type: str = "ndvi",
     plot_id: str | None = None,
     scene_id: str | None = None,
     geometry_digest: str | None = None,
 ) -> str:
     """Return a deterministic filename that is unique per plot/scene."""
+    index_type, _, _ = _overlay_spec(index_type)
     geometry_token = _safe_filename_token(geometry_digest, "unknown-geometry")
     scene_digest = hashlib.sha256((scene_id or "unknown-scene").encode("utf-8")).hexdigest()[:12]
     plot_token = _safe_filename_token(plot_id, "plot")
-    return f"ndvi_{plot_token}_{geometry_token}_{_safe_filename_token(observed, 'unknown-date')}_{scene_digest}"
+    return f"{index_type}_{plot_token}_{geometry_token}_{_safe_filename_token(observed, 'unknown-date')}_{scene_digest}"
+
+
+def _overlay_spec(index_type: str) -> tuple[str, tuple[str, ...], str]:
+    """Return the canonical overlay key, palette, and formula."""
+    aliases = {"ndvi": "ndvi", "ndmi": "ndmi", "ndwi": "ndmi", "gao_ndwi": "ndmi"}
+    canonical = aliases.get(index_type.lower())
+    if canonical is None:
+        raise SatelliteServiceError(f"unsupported_overlay_index:{index_type}")
+    return canonical, OVERLAY_PALETTES[canonical], OVERLAY_FORMULAS[canonical]
+
+
+def _overlay_metadata(
+    index_type: str,
+    observed: str,
+    bounds: tuple[float, float, float, float] | None,
+    path: str | None,
+) -> dict[str, Any]:
+    canonical, palette, formula = _overlay_spec(index_type)
+    return {
+        "index_type": canonical,
+        "formula": formula,
+        "observed_at": observed,
+        "bounds": list(bounds) if bounds is not None else None,
+        "palette": list(palette),
+        "path": path,
+    }
 
 
 def _geometry_digest(geometry: BaseGeometry) -> str:
@@ -623,13 +690,15 @@ def find_overlay_path(
     geometry: BaseGeometry,
     observed: str,
     directory: str | Path,
+    index_type: str = "ndvi",
 ) -> Path | None:
     """Resolve an overlay only from trusted plot metadata and a fixed directory."""
+    index_type, _, _ = _overlay_spec(index_type)
     root = Path(directory).resolve()
     if not root.is_dir():
         return None
     prefix = (
-        f"ndvi_{_safe_filename_token(plot_id, 'plot')}_"
+        f"{index_type}_{_safe_filename_token(plot_id, 'plot')}_"
         f"{_geometry_digest(geometry)}_{_safe_filename_token(observed, 'unknown-date')}_"
     )
     for candidate in sorted(root.glob(f"{prefix}*.png"), key=lambda item: item.stat().st_mtime, reverse=True):

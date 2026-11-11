@@ -297,6 +297,41 @@ def test_overlay_clips_to_polygon_and_writes_alpha_png(request, monkeypatch):
     assert png[25] == 6  # RGBA color type
 
 
+def test_ndvi_and_ndmi_overlay_types_use_distinct_palettes_and_metadata(request, monkeypatch):
+    overlay_dir = Path("artifacts")
+    monkeypatch.setattr(settings, "satellite_overlay_dir", str(overlay_dir))
+    monkeypatch.setattr(sat.urllib.request, "urlretrieve", lambda url, target: Path(target).write_bytes(_rgba_png()))
+    outputs = []
+
+    for index_type in ("ndvi", "ndmi"):
+        image = FakeOverlayImage()
+        result = sat._render_overlay(
+            image,
+            "polygon-region",
+            "2026-11-01",
+            object(),
+            index_type=index_type,
+            plot_id="MA-001",
+            scene_id="S2A_TEST_SCENE",
+            geometry_digest="geometry-a",
+        )
+        outputs.append(Path(result))
+        assert outputs[-1].name.startswith(f"{index_type}_MA-001_")
+        assert image.visualize_args["min"] == -1
+        assert image.visualize_args["max"] == 1
+        assert image.visualize_args["palette"] == list(sat.OVERLAY_PALETTES[index_type])
+        assert image.clip_region == "polygon-region"
+
+        metadata = sat._overlay_metadata(index_type, "2026-11-01", (-7.5898, 33.5731, -7.5888, 33.574), str(outputs[-1]))
+        assert metadata["index_type"] == index_type
+        assert metadata["observed_at"] == "2026-11-01"
+        assert metadata["bounds"] == [-7.5898, 33.5731, -7.5888, 33.574]
+        assert metadata["palette"] == list(sat.OVERLAY_PALETTES[index_type])
+        assert metadata["path"] == str(outputs[-1])
+
+    request.addfinalizer(lambda: [path.unlink(missing_ok=True) for path in outputs])
+
+
 def test_overlay_filename_is_stable_and_distinct_per_plot_geometry_and_scene():
     first = sat._overlay_filename(
         "2026-11-01", plot_id="MA-001", scene_id="scene-a", geometry_digest="geometry-a"
@@ -307,8 +342,13 @@ def test_overlay_filename_is_stable_and_distinct_per_plot_geometry_and_scene():
     other_plot = sat._overlay_filename(
         "2026-11-01", plot_id="MA-002", scene_id="scene-a", geometry_digest="geometry-b"
     )
+    ndmi = sat._overlay_filename(
+        "2026-11-01", index_type="ndmi", plot_id="MA-001", scene_id="scene-a", geometry_digest="geometry-a"
+    )
     assert first == same_inputs
     assert first != other_plot
+    assert first != ndmi
+    assert ndmi.startswith("ndmi_MA-001_")
     assert first.endswith(".png") is False
 
 
