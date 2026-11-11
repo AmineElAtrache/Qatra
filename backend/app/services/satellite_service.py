@@ -30,6 +30,7 @@ RADAR_COLLECTION = "COPERNICUS/S1_GRD"
 MIN_VALID_PIXEL_PCT = 70.0
 DEFAULT_LOOKBACK_DAYS = 10
 MAX_OBSERVATION_AGE_DAYS = 10
+MAX_ANALYSIS_RANGE_DAYS = 366
 REQUIRED_OPTICAL_BANDS = ("B4", "B8", "B11")
 SCL_INVALID_CLASSES = frozenset({0, 1, 2, 3, 8, 9, 10, 11})
 OVERLAY_PALETTES = {
@@ -373,6 +374,171 @@ async def fetch_acquisitions(
 
     normalized = _normalize_acquisitions(acquisitions, geometry, start, end)
     return normalized[:max_acquisitions] if max_acquisitions is not None else normalized
+
+
+async def build_satellite_analysis_report(
+    *,
+    geojson: Mapping[str, Any] | BaseGeometry,
+    start_date: date | str,
+    end_date: date | str,
+    earlier_scene_id: str | None = None,
+    later_scene_id: str | None = None,
+    include_spatial_difference: bool = False,
+    generate_overlays: bool = False,
+    client: TimeSeriesSceneClient | None = None,
+    spatial_client: SpatialDifferenceClient | None = None,
+    max_acquisitions: int | None = None,
+) -> dict[str, Any]:
+    """Build a JSON-serializable Satellite analysis for one parcel.
+
+    Acquisitions are fetched once and reused for temporal comparison. If no
+    scene IDs are supplied, the earliest and latest returned acquisitions are
+    selected for the temporal summary. Spatial processing is opt-in because it
+    creates additional provider requests and overlays.
+    """
+    geometry = validate_polygon(geojson)
+    start = _as_date(start_date)
+    end = _as_date(end_date)
+    if start > end:
+        raise SatelliteServiceError("invalid_date_window")
+    if (end - start).days > MAX_ANALYSIS_RANGE_DAYS:
+        raise SatelliteServiceError("analysis_date_window_too_wide")
+
+    bounds = [float(value) for value in geometry.bounds]
+    report: dict[str, Any] = {
+        "schema_version": "satellite-analysis-v1",
+        "status": "partial",
+        "plot": {"bounds": bounds},
+        "date_range": {"start": start.isoformat(), "end": end.isoformat()},
+        "index_definitions": {
+            "ndvi": OVERLAY_FORMULAS["ndvi"],
+            "ndmi": OVERLAY_FORMULAS["ndmi"],
+        },
+        "available_acquisitions": [],
+        "temporal_comparison": None,
+        "spatial_difference": None,
+        "missing_data_reasons": [],
+        "limitations": [
+            "NDVI and Gao NDWI/NDMI are spectral indicators, not direct crop-disease or water-stress diagnoses."
+        ],
+    }
+    try:
+        acquisitions = await fetch_acquisitions(
+            geojson=geometry,
+            start_date=start,
+            end_date=end,
+            client=client,
+            max_acquisitions=max_acquisitions,
+        )
+    except SatelliteServiceError as exc:
+        report["status"] = "unavailable"
+        report["missing_data_reasons"].append(str(exc))
+        return report
+
+    report["available_acquisitions"] = [_acquisition_to_dict(item) for item in acquisitions]
+    if not acquisitions:
+        report["status"] = "no_data"
+        report["missing_data_reasons"].append("no_valid_sentinel2_acquisitions")
+        return report
+
+    selected_earlier, selected_later, selection_reasons = _select_report_acquisitions(
+        acquisitions, earlier_scene_id, later_scene_id
+    )
+    report["missing_data_reasons"].extend(selection_reasons)
+    if selected_earlier is not None and selected_later is not None:
+        try:
+            comparison = compare_acquisitions(selected_earlier, selected_later)
+            report["temporal_comparison"] = _comparison_to_dict(comparison)
+        except IncompatibleSatelliteObservations as exc:
+            report["missing_data_reasons"].append(str(exc))
+    elif earlier_scene_id or later_scene_id:
+        report["missing_data_reasons"].append("two_selected_scenes_required")
+
+    if include_spatial_difference:
+        if selected_earlier is None or selected_later is None:
+            report["missing_data_reasons"].append("spatial_scene_selection_unavailable")
+        elif report["temporal_comparison"] is None:
+            report["missing_data_reasons"].append("spatial_comparison_requires_compatible_scenes")
+        else:
+            try:
+                spatial = await compare_scene_maps(
+                    geojson=geometry,
+                    earlier_scene_id=selected_earlier.scene_id or "",
+                    later_scene_id=selected_later.scene_id or "",
+                    generate_overlay=generate_overlays,
+                    client=spatial_client,
+                )
+                report["spatial_difference"] = _spatial_difference_to_dict(spatial)
+            except SatelliteServiceError as exc:
+                report["missing_data_reasons"].append(str(exc))
+
+    report["status"] = "complete" if not report["missing_data_reasons"] else "partial"
+    return report
+
+
+def _select_report_acquisitions(
+    acquisitions: Sequence[SatelliteAcquisition],
+    earlier_scene_id: str | None,
+    later_scene_id: str | None,
+) -> tuple[SatelliteAcquisition | None, SatelliteAcquisition | None, list[str]]:
+    if not earlier_scene_id and not later_scene_id:
+        if len(acquisitions) < 2:
+            return None, None, ["fewer_than_two_acquisitions_for_comparison"]
+        return acquisitions[0], acquisitions[-1], []
+    earlier = next((item for item in acquisitions if item.scene_id == earlier_scene_id), None)
+    later = next((item for item in acquisitions if item.scene_id == later_scene_id), None)
+    reasons = []
+    if earlier is None:
+        reasons.append("earlier_scene_not_available")
+    if later is None:
+        reasons.append("later_scene_not_available")
+    return earlier, later, reasons
+
+
+def _acquisition_to_dict(acquisition: SatelliteAcquisition) -> dict[str, Any]:
+    return {
+        "scene_id": acquisition.scene_id,
+        "observed_at": acquisition.observed_at,
+        "ndvi": acquisition.ndvi,
+        "ndmi": acquisition.ndmi,
+        "valid_pixel_pct": acquisition.valid_pixel_pct,
+        "quality": acquisition.quality,
+        "satellite_source": acquisition.satellite_source,
+        "bounds": list(acquisition.bounds) if acquisition.bounds is not None else None,
+    }
+
+
+def _comparison_to_dict(comparison: SatelliteComparison) -> dict[str, Any]:
+    return {
+        "earlier_scene_id": comparison.earlier_scene_id,
+        "later_scene_id": comparison.later_scene_id,
+        "earlier_observed_at": comparison.earlier_observed_at,
+        "later_observed_at": comparison.later_observed_at,
+        "ndvi_change": comparison.ndvi_change,
+        "ndmi_change": comparison.ndmi_change,
+        "valid_pixel_pct": comparison.valid_pixel_pct,
+        "quality": comparison.quality,
+        "bounds": list(comparison.bounds) if comparison.bounds is not None else None,
+    }
+
+
+def _spatial_difference_to_dict(difference: SatelliteSpatialDifference) -> dict[str, Any]:
+    return {
+        "earlier_scene_id": difference.earlier_scene_id,
+        "later_scene_id": difference.later_scene_id,
+        "earlier_observed_at": difference.earlier_observed_at,
+        "later_observed_at": difference.later_observed_at,
+        "shared_valid_pixel_pct": difference.shared_valid_pixel_pct,
+        "earlier_valid_pixel_pct": difference.earlier_valid_pixel_pct,
+        "later_valid_pixel_pct": difference.later_valid_pixel_pct,
+        "quality": difference.quality,
+        "bounds": list(difference.bounds),
+        "overlay_paths": {
+            "ndvi_delta": difference.delta_ndvi_map_path,
+            "ndmi_delta": difference.delta_ndmi_map_path,
+        },
+        "metadata": dict(difference.quality_details),
+    }
 
 
 def compare_acquisitions(

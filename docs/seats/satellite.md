@@ -113,3 +113,50 @@ The function rejects missing scenes, non-chronological dates, missing bands,
 and any individual or shared valid coverage below the existing 70% quality
 rule. Backend/Interface can later expose these paths through a reviewed
 scene-selection endpoint; no contract fields are added here.
+
+## Reusable analysis report
+
+`build_satellite_analysis_report(geojson, start_date, end_date,
+earlier_scene_id=None, later_scene_id=None,
+include_spatial_difference=False, generate_overlays=False, client=None,
+spatial_client=None, max_acquisitions=None)` returns a plain,
+JSON-serializable dictionary for later Backend integration. It calls
+`fetch_acquisitions()` once, reuses those observations for
+`compare_acquisitions()`, and calls `compare_scene_maps()` only when spatial
+analysis is explicitly enabled and two compatible scenes are available.
+
+When scene IDs are omitted, the earliest and latest available acquisitions are
+selected for the temporal summary. Explicit IDs must match returned `scene_id`
+values. Missing observations are never replaced with estimates. The analysis
+window is bounded to 366 days.
+
+The result contains `schema_version`, `status`, plot bounds, date range,
+`available_acquisitions`, `temporal_comparison`, optional
+`spatial_difference` metadata and overlay paths, `missing_data_reasons`, and a
+scientific `limitations` list. A typical shape is:
+
+```json
+{
+  "schema_version": "satellite-analysis-v1",
+  "status": "complete",
+  "plot": {"bounds": [-7.5898, 33.5731, -7.5888, 33.574]},
+  "date_range": {"start": "2026-01-01", "end": "2026-01-31"},
+  "available_acquisitions": [],
+  "temporal_comparison": {
+    "ndvi_change": 0.13,
+    "ndmi_change": -0.06,
+    "valid_pixel_pct": 88.0
+  },
+  "spatial_difference": {
+    "overlay_paths": {"ndvi_delta": null, "ndmi_delta": null},
+    "bounds": [-7.5898, 33.5731, -7.5888, 33.574]
+  },
+  "missing_data_reasons": [],
+  "limitations": ["Spectral indices are indicators, not direct diagnoses."]
+}
+```
+
+Backend can later call this function from an adapter and persist or expose the
+report under a reviewed API. It should map only `SatelliteObservation.to_contract_dict()`
+to the existing shared contract; the richer report fields remain Satellite
+metadata until the team approves an interface change.
