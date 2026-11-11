@@ -946,19 +946,28 @@ def _observe_earth_engine_spatial_difference(
         earlier_ndvi, earlier_ndmi, earlier_valid = _masked_scene_indices(earlier_image, ee)
         later_ndvi, later_ndmi, later_valid = _masked_scene_indices(later_image, ee)
         target_projection = later_image.select("B8").projection()
-        earlier_ndvi = earlier_ndvi.reproject(target_projection)
-        earlier_ndmi = earlier_ndmi.reproject(target_projection)
-        earlier_valid = earlier_valid.reproject(target_projection)
-        later_ndvi = later_ndvi.reproject(target_projection)
-        later_ndmi = later_ndmi.reproject(target_projection)
-        later_valid = later_valid.reproject(target_projection)
+        # Keep alignment lazy. ``reproject`` forces an expensive computation
+        # during every downstream reduction/thumbnail request; setting the
+        # default projection preserves the later B08 10 m grid without
+        # eagerly resampling either scene.
+        earlier_ndvi = earlier_ndvi.setDefaultProjection(target_projection)
+        earlier_ndmi = earlier_ndmi.setDefaultProjection(target_projection)
+        earlier_valid = earlier_valid.setDefaultProjection(target_projection)
+        later_ndvi = later_ndvi.setDefaultProjection(target_projection)
+        later_ndmi = later_ndmi.setDefaultProjection(target_projection)
+        later_valid = later_valid.setDefaultProjection(target_projection)
         earlier_valid = earlier_valid.rename("earlier_valid")
         later_valid = later_valid.rename("later_valid")
         shared_valid = earlier_valid.And(later_valid).rename("shared_valid")
         delta_ndvi = later_ndvi.subtract(earlier_ndvi).updateMask(shared_valid).rename("delta_NDVI")
         delta_ndmi = later_ndmi.subtract(earlier_ndmi).updateMask(shared_valid).rename("delta_NDMI")
         stats = ee.Image.cat([earlier_valid, later_valid, shared_valid]).reduceRegion(
-            ee.Reducer.mean(), region, 10, maxPixels=1_000_000, bestEffort=True
+            ee.Reducer.mean(),
+            region,
+            10,
+            crs=target_projection,
+            maxPixels=1_000_000,
+            bestEffort=True,
         ).getInfo()
         earlier_pct = _fraction_to_pct(stats.get("earlier_valid"))
         later_pct = _fraction_to_pct(stats.get("later_valid"))
