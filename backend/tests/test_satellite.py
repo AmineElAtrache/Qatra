@@ -123,6 +123,27 @@ def test_spatial_metadata_indexes_product_and_system_ids_and_preserves_bands():
     assert sat.missing_required_bands(metadata["product-later"]["band_names"]) == ("B11",)
 
 
+def test_spatial_scene_filter_avoids_or_for_homogeneous_identifiers():
+    class FakeFilter:
+        @staticmethod
+        def inList(field, values):
+            return ("inList", field, tuple(values))
+
+        @staticmethod
+        def Or(*filters):
+            return ("Or", filters)
+
+    class FakeEE:
+        Filter = FakeFilter
+
+    products = sat._spatial_scene_filter(FakeEE, ("S2C_MSIL2A_a", "S2C_MSIL2A_b"))
+    systems = sat._spatial_scene_filter(FakeEE, ("system-a", "system-b"))
+    mixed = sat._spatial_scene_filter(FakeEE, ("S2C_MSIL2A_a", "system-b"))
+    assert products[1] == "PRODUCT_ID"
+    assert systems[1] == "system:index"
+    assert mixed[0] == "Or"
+
+
 def test_valid_pixel_percentage_and_scl_quality_threshold():
     assert sat.is_valid_scl(4) is True
     assert sat.is_valid_scl(3) is False
