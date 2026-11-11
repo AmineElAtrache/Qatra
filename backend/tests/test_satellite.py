@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import json
 import struct
 import zlib
 from datetime import date, timedelta
@@ -347,6 +348,72 @@ def test_fetch_acquisitions_supports_max_count_without_requerying():
     result = run(sat.fetch_acquisitions(geojson=PLOT, start_date="2026-01-01", end_date="2026-01-03", client=client, max_acquisitions=1))
     assert len(result) == 1
     assert len(client.calls) == 1
+
+
+def test_analysis_report_complete_reuses_acquisitions_and_is_json_serializable():
+    bounds = tuple(sat.validate_polygon(PLOT).bounds)
+    acquisitions = [
+        sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good", bounds=bounds),
+        sat.SatelliteAcquisition("scene-b", "2026-01-20", 0.55, 0.12, 92, "good", bounds=bounds),
+    ]
+    spatial = sat.SatelliteSpatialDifference(
+        "scene-a", "scene-b", "2026-01-10", "2026-01-20", "ndvi.png", "ndmi.png", 88, 88, 92, "good", bounds,
+        {"grid_alignment": "later_scene_B8_projection"},
+    )
+    time_client = FakeTimeSeriesClient(acquisitions)
+    spatial_client = FakeSpatialDifferenceClient(spatial)
+    result = run(
+        sat.build_satellite_analysis_report(
+            geojson=PLOT,
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            include_spatial_difference=True,
+            generate_overlays=True,
+            client=time_client,
+            spatial_client=spatial_client,
+        )
+    )
+    json.dumps(result)
+    assert result["status"] == "complete"
+    assert [item["scene_id"] for item in result["available_acquisitions"]] == ["scene-a", "scene-b"]
+    assert result["temporal_comparison"]["ndvi_change"] == 0.13
+    assert result["temporal_comparison"]["ndmi_change"] == -0.06
+    assert result["spatial_difference"]["overlay_paths"] == {"ndvi_delta": "ndvi.png", "ndmi_delta": "ndmi.png"}
+    assert spatial_client.calls[0][3] is True
+
+
+def test_analysis_report_partial_selection_preserves_missing_reason():
+    client = FakeTimeSeriesClient([sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good")])
+    result = run(
+        sat.build_satellite_analysis_report(
+            geojson=PLOT,
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            earlier_scene_id="scene-a",
+            later_scene_id="missing",
+            client=client,
+        )
+    )
+    assert result["status"] == "partial"
+    assert result["temporal_comparison"] is None
+    assert "later_scene_not_available" in result["missing_data_reasons"]
+    assert "two_selected_scenes_required" in result["missing_data_reasons"]
+
+
+def test_analysis_report_missing_data_is_explicit_and_does_not_fabricate():
+    result = run(
+        sat.build_satellite_analysis_report(
+            geojson=PLOT,
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            client=FakeTimeSeriesClient([]),
+        )
+    )
+    assert result["status"] == "no_data"
+    assert result["available_acquisitions"] == []
+    assert result["temporal_comparison"] is None
+    assert result["spatial_difference"] is None
+    assert result["missing_data_reasons"] == ["no_valid_sentinel2_acquisitions"]
 
 
 def test_batched_feature_response_matches_previous_normalization():
