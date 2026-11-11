@@ -103,3 +103,13 @@ The Earth Engine implementation maps one summary feature per image on the
 server, combining NDVI, NDMI, valid coverage, date, and scene ID into one
 FeatureCollection response. It does not download images or issue separate
 regional `getInfo()` calls for each acquisition.
+
+`compare_scene_maps(geojson, earlier_scene_id, later_scene_id)` resolves the
+verified Sentinel-2 `PRODUCT_ID` or `system:index` values, aligns both dates
+to the later scene's B08 projection at 10 m, intersects both SCL/band masks,
+and optionally renders `ndvi_delta` and `ndmi_delta` parcel overlays. Delta
+maps use a symmetric `[-1, 1]` scale and diverging palette centered at zero.
+The function rejects missing scenes, non-chronological dates, missing bands,
+and any individual or shared valid coverage below the existing 70% quality
+rule. Backend/Interface can later expose these paths through a reviewed
+scene-selection endpoint; no contract fields are added here.

@@ -35,10 +35,14 @@ SCL_INVALID_CLASSES = frozenset({0, 1, 2, 3, 8, 9, 10, 11})
 OVERLAY_PALETTES = {
     "ndvi": ("#440154", "#21918c", "#fde725"),
     "ndmi": ("#8c510a", "#f6e8c3", "#5ab4ac", "#01665e"),
+    "ndvi_delta": ("#b2182b", "#f7f7f7", "#2166ac"),
+    "ndmi_delta": ("#b2182b", "#f7f7f7", "#2166ac"),
 }
 OVERLAY_FORMULAS = {
     "ndvi": "(B08-B04)/(B08+B04)",
     "ndmi": "gao_ndwi_ndmi:(B08-B11)/(B08+B11)",
+    "ndvi_delta": "NDVI_later-NDVI_earlier",
+    "ndmi_delta": "NDMI_later-NDMI_earlier",
 }
 
 
@@ -89,6 +93,24 @@ class SatelliteComparison:
 
 
 @dataclass
+class SatelliteSpatialDifference:
+    """Pixel-wise differences between two compatible Sentinel-2 scenes."""
+
+    earlier_scene_id: str
+    later_scene_id: str
+    earlier_observed_at: str
+    later_observed_at: str
+    delta_ndvi_map_path: str | None
+    delta_ndmi_map_path: str | None
+    shared_valid_pixel_pct: float
+    earlier_valid_pixel_pct: float
+    later_valid_pixel_pct: float
+    quality: str
+    bounds: tuple[float, float, float, float]
+    quality_details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class SatelliteObservation:
     ndvi: float | None
     ndwi: float | None
@@ -121,6 +143,17 @@ class SceneClient(Protocol):
 
 class TimeSeriesSceneClient(Protocol):
     def observe_many(self, geometry: BaseGeometry, start: date, end: date) -> Sequence[SatelliteAcquisition]:
+        ...
+
+
+class SpatialDifferenceClient(Protocol):
+    def compare_scenes(
+        self,
+        geometry: BaseGeometry,
+        earlier_scene_id: str,
+        later_scene_id: str,
+        generate_overlay: bool,
+    ) -> SatelliteSpatialDifference:
         ...
 
 
@@ -382,6 +415,94 @@ def compare_acquisitions(
         quality="compatible",
         bounds=earlier.bounds,
     )
+
+
+async def compare_scene_maps(
+    *,
+    geojson: Mapping[str, Any] | BaseGeometry,
+    earlier_scene_id: str,
+    later_scene_id: str,
+    generate_overlay: bool = True,
+    client: SpatialDifferenceClient | None = None,
+) -> SatelliteSpatialDifference:
+    """Create clipped pixel-wise NDVI/NDMI deltas for two scene IDs.
+
+    The two IDs are resolved against the Sentinel-2 collection itself; no
+    caller-provided raster values are accepted. Sentinel-1 is never used.
+    """
+    geometry = validate_polygon(geojson)
+    if not earlier_scene_id or not later_scene_id or earlier_scene_id == later_scene_id:
+        raise IncompatibleSatelliteObservations("distinct_scene_ids_required")
+    if client is not None:
+        result = await asyncio.to_thread(
+            client.compare_scenes,
+            geometry,
+            earlier_scene_id,
+            later_scene_id,
+            generate_overlay,
+        )
+        return _validate_spatial_difference(result)
+    return await asyncio.to_thread(
+        _observe_earth_engine_spatial_difference,
+        geometry,
+        earlier_scene_id,
+        later_scene_id,
+        generate_overlay,
+    )
+
+
+def compute_spatial_difference(
+    earlier_ndvi: Sequence[float | None],
+    later_ndvi: Sequence[float | None],
+    earlier_ndmi: Sequence[float | None],
+    later_ndmi: Sequence[float | None],
+    earlier_valid: Sequence[bool],
+    later_valid: Sequence[bool],
+) -> tuple[list[float | None], list[float | None], float | None]:
+    """Compute aligned-array deltas using the intersection of both masks."""
+    lengths = {
+        len(earlier_ndvi),
+        len(later_ndvi),
+        len(earlier_ndmi),
+        len(later_ndmi),
+        len(earlier_valid),
+        len(later_valid),
+    }
+    if len(lengths) != 1:
+        raise IncompatibleSatelliteObservations("spatial_grid_shape_mismatch")
+    total = len(earlier_ndvi)
+    if total == 0:
+        return [], [], None
+    delta_ndvi: list[float | None] = []
+    delta_ndmi: list[float | None] = []
+    shared_count = 0
+    for index in range(total):
+        valid = earlier_valid[index] and later_valid[index]
+        if valid:
+            shared_count += 1
+        delta_ndvi.append(
+            round(later_ndvi[index] - earlier_ndvi[index], 6)
+            if valid and earlier_ndvi[index] is not None and later_ndvi[index] is not None
+            else None
+        )
+        delta_ndmi.append(
+            round(later_ndmi[index] - earlier_ndmi[index], 6)
+            if valid and earlier_ndmi[index] is not None and later_ndmi[index] is not None
+            else None
+        )
+    return delta_ndvi, delta_ndmi, round(shared_count * 100.0 / total, 2)
+
+
+def _validate_spatial_difference(result: SatelliteSpatialDifference) -> SatelliteSpatialDifference:
+    if result.quality != "good":
+        raise IncompatibleSatelliteObservations("observation_quality_not_good")
+    if min(
+        result.shared_valid_pixel_pct,
+        result.earlier_valid_pixel_pct,
+        result.later_valid_pixel_pct,
+    ) < MIN_VALID_PIXEL_PCT:
+        raise IncompatibleSatelliteObservations("shared_valid_coverage_below_threshold")
+    return result
 
 
 def _normalize_acquisitions(
@@ -748,6 +869,197 @@ def _observe_earth_engine_series(
         raise SatelliteServiceError("earth_engine_request_failed") from exc
 
 
+def _observe_earth_engine_spatial_difference(
+    geometry: BaseGeometry,
+    earlier_scene_id: str,
+    later_scene_id: str,
+    generate_overlay: bool,
+) -> SatelliteSpatialDifference:
+    """Resolve two scenes and compute masked deltas on the later B8 grid."""
+    try:
+        import ee  # type: ignore
+    except ImportError as exc:
+        raise EarthEngineUnavailable("earthengine_not_installed") from exc
+    from app.core.config import settings
+
+    if not settings.gee_project_id:
+        raise EarthEngineUnavailable("gee_project_id_missing")
+    try:
+        _initialize_ee(ee, settings.gee_project_id, settings.gee_credentials_path)
+        region = ee.Geometry(geometry.__geo_interface__)
+        scene_filter = ee.Filter.Or(
+            ee.Filter.inList("system:index", [earlier_scene_id, later_scene_id]),
+            ee.Filter.inList("PRODUCT_ID", [earlier_scene_id, later_scene_id]),
+        )
+        selected = ee.ImageCollection(OPTICAL_COLLECTION).filter(scene_filter).sort("system:time_start")
+        count = int(selected.size().getInfo())
+        if count != 2:
+            raise IncompatibleSatelliteObservations("scene_not_found")
+
+        metadata_features = selected.map(
+            lambda image: ee.Feature(
+                None,
+                {
+                    "scene_id": image.get("system:index"),
+                    "product_id": image.get("PRODUCT_ID"),
+                    "observed_ms": image.get("system:time_start"),
+                },
+            )
+        ).getInfo().get("features", [])
+        metadata: dict[str, Mapping[str, Any]] = {}
+        for feature in metadata_features:
+            properties = feature.get("properties", {})
+            for key in ("scene_id", "product_id"):
+                value = properties.get(key)
+                if value:
+                    metadata[str(value)] = properties
+        if earlier_scene_id not in metadata or later_scene_id not in metadata:
+            raise IncompatibleSatelliteObservations("scene_not_found")
+        earlier_observed = _timestamp_to_date(metadata[earlier_scene_id].get("observed_ms"))
+        later_observed = _timestamp_to_date(metadata[later_scene_id].get("observed_ms"))
+        if not earlier_observed or not later_observed or earlier_observed >= later_observed:
+            raise IncompatibleSatelliteObservations("dates_not_chronological")
+
+        earlier_image = ee.Image(
+            selected.filter(
+                ee.Filter.Or(
+                    ee.Filter.eq("system:index", earlier_scene_id),
+                    ee.Filter.eq("PRODUCT_ID", earlier_scene_id),
+                )
+            ).first()
+        )
+        later_image = ee.Image(
+            selected.filter(
+                ee.Filter.Or(
+                    ee.Filter.eq("system:index", later_scene_id),
+                    ee.Filter.eq("PRODUCT_ID", later_scene_id),
+                )
+            ).first()
+        )
+        earlier_bands = tuple(str(value) for value in earlier_image.bandNames().getInfo())
+        later_bands = tuple(str(value) for value in later_image.bandNames().getInfo())
+        missing_earlier = missing_required_bands(earlier_bands)
+        missing_later = missing_required_bands(later_bands)
+        if missing_earlier or missing_later:
+            raise IncompatibleSatelliteObservations("missing_required_bands")
+
+        earlier_ndvi, earlier_ndmi, earlier_valid = _masked_scene_indices(earlier_image, ee)
+        later_ndvi, later_ndmi, later_valid = _masked_scene_indices(later_image, ee)
+        target_projection = later_image.select("B8").projection()
+        earlier_ndvi = earlier_ndvi.reproject(target_projection)
+        earlier_ndmi = earlier_ndmi.reproject(target_projection)
+        earlier_valid = earlier_valid.reproject(target_projection)
+        later_ndvi = later_ndvi.reproject(target_projection)
+        later_ndmi = later_ndmi.reproject(target_projection)
+        later_valid = later_valid.reproject(target_projection)
+        shared_valid = earlier_valid.And(later_valid).rename("shared_valid")
+        delta_ndvi = later_ndvi.subtract(earlier_ndvi).updateMask(shared_valid).rename("delta_NDVI")
+        delta_ndmi = later_ndmi.subtract(earlier_ndmi).updateMask(shared_valid).rename("delta_NDMI")
+        stats = ee.Image.cat([earlier_valid, later_valid, shared_valid]).reduceRegion(
+            ee.Reducer.mean(), region, 10, maxPixels=1_000_000, bestEffort=True
+        ).getInfo()
+        earlier_pct = _fraction_to_pct(stats.get("valid"))
+        later_pct = _fraction_to_pct(stats.get("valid_1"))
+        shared_pct = _fraction_to_pct(stats.get("shared_valid"))
+        # Earth Engine renames the duplicate valid bands deterministically;
+        # fail closed if any coverage statistic is absent.
+        values = [value for value in (earlier_pct, later_pct, shared_pct) if value is not None]
+        if len(values) != 3 or min(values) < MIN_VALID_PIXEL_PCT:
+            raise IncompatibleSatelliteObservations("shared_valid_coverage_below_threshold")
+
+        bounds = tuple(float(value) for value in geometry.bounds)
+        difference = SatelliteSpatialDifference(
+            earlier_scene_id=earlier_scene_id,
+            later_scene_id=later_scene_id,
+            earlier_observed_at=earlier_observed,
+            later_observed_at=later_observed,
+            delta_ndvi_map_path=None,
+            delta_ndmi_map_path=None,
+            shared_valid_pixel_pct=shared_pct,
+            earlier_valid_pixel_pct=earlier_pct,
+            later_valid_pixel_pct=later_pct,
+            quality="good",
+            bounds=bounds,
+            quality_details={
+                "collection": OPTICAL_COLLECTION,
+                "cloud_mask": "SCL",
+                "required_bands": REQUIRED_OPTICAL_BANDS,
+                "grid_alignment": "later_scene_B8_projection",
+                "resolution_m": 10,
+                "ndvi_formula": OVERLAY_FORMULAS["ndvi"],
+                "ndmi_formula": OVERLAY_FORMULAS["ndmi"],
+                "delta_ndvi_formula": OVERLAY_FORMULAS["ndvi_delta"],
+                "delta_ndmi_formula": OVERLAY_FORMULAS["ndmi_delta"],
+            },
+        )
+        if generate_overlay:
+            geometry_digest = _geometry_digest(geometry)
+            pair_id = f"{earlier_scene_id}__{later_scene_id}"
+            difference.delta_ndvi_map_path = _render_overlay(
+                delta_ndvi,
+                region,
+                later_observed,
+                ee,
+                index_type="ndvi_delta",
+                plot_id=_plot_identifier(geometry.__geo_interface__),
+                scene_id=pair_id,
+                geometry_digest=geometry_digest,
+            )
+            difference.delta_ndmi_map_path = _render_overlay(
+                delta_ndmi,
+                region,
+                later_observed,
+                ee,
+                index_type="ndmi_delta",
+                plot_id=_plot_identifier(geometry.__geo_interface__),
+                scene_id=pair_id,
+                geometry_digest=geometry_digest,
+            )
+            difference.quality_details["overlay_metadata"] = {
+                "ndvi_delta": _overlay_metadata(
+                    "ndvi_delta", later_observed, bounds, difference.delta_ndvi_map_path
+                ),
+                "ndmi_delta": _overlay_metadata(
+                    "ndmi_delta", later_observed, bounds, difference.delta_ndmi_map_path
+                ),
+            }
+        return difference
+    except (EarthEngineUnavailable, IncompatibleSatelliteObservations):
+        raise
+    except Exception as exc:
+        raise SatelliteServiceError("earth_engine_spatial_difference_failed") from exc
+
+
+def _masked_scene_indices(image: Any, ee: Any) -> tuple[Any, Any, Any]:
+    scl = image.select("SCL")
+    mask = (
+        scl.neq(0)
+        .And(scl.neq(1))
+        .And(scl.neq(2))
+        .And(scl.neq(3))
+        .And(scl.neq(8))
+        .And(scl.neq(9))
+        .And(scl.neq(10))
+        .And(scl.neq(11))
+    )
+    masked = image.updateMask(mask)
+    reflectance = masked.select(list(REQUIRED_OPTICAL_BANDS)).divide(10000)
+    ndvi = reflectance.normalizedDifference(["B8", "B4"]).rename("NDVI")
+    ndmi = reflectance.normalizedDifference(["B8", "B11"]).rename("NDMI_GAO")
+    valid = masked.select(list(REQUIRED_OPTICAL_BANDS)).mask().reduce(ee.Reducer.min()).rename("valid")
+    return ndvi, ndmi, valid
+
+
+def _fraction_to_pct(*values: Any) -> float | None:
+    for value in values:
+        if value is not None:
+            try:
+                return round(float(value) * 100.0, 2)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def _parse_batched_features(
     features: Sequence[Mapping[str, Any]],
     geometry: BaseGeometry,
@@ -953,7 +1265,14 @@ def _overlay_filename(
 
 def _overlay_spec(index_type: str) -> tuple[str, tuple[str, ...], str]:
     """Return the canonical overlay key, palette, and formula."""
-    aliases = {"ndvi": "ndvi", "ndmi": "ndmi", "ndwi": "ndmi", "gao_ndwi": "ndmi"}
+    aliases = {
+        "ndvi": "ndvi",
+        "ndmi": "ndmi",
+        "ndwi": "ndmi",
+        "gao_ndwi": "ndmi",
+        "ndvi_delta": "ndvi_delta",
+        "ndmi_delta": "ndmi_delta",
+    }
     canonical = aliases.get(index_type.lower())
     if canonical is None:
         raise SatelliteServiceError(f"unsupported_overlay_index:{index_type}")
