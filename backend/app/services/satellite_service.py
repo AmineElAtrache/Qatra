@@ -913,21 +913,15 @@ def _observe_earth_engine_spatial_difference(
         if not earlier_observed or not later_observed or earlier_observed >= later_observed:
             raise IncompatibleSatelliteObservations("dates_not_chronological")
 
+        earlier_system_id = metadata[earlier_scene_id].get("scene_id")
+        later_system_id = metadata[later_scene_id].get("scene_id")
+        if not earlier_system_id or not later_system_id:
+            raise IncompatibleSatelliteObservations("scene_not_found")
         earlier_image = ee.Image(
-            selected.filter(
-                ee.Filter.Or(
-                    ee.Filter.eq("system:index", earlier_scene_id),
-                    ee.Filter.eq("PRODUCT_ID", earlier_scene_id),
-                )
-            ).first()
+            selected.filter(ee.Filter.eq("system:index", earlier_system_id)).first()
         )
         later_image = ee.Image(
-            selected.filter(
-                ee.Filter.Or(
-                    ee.Filter.eq("system:index", later_scene_id),
-                    ee.Filter.eq("PRODUCT_ID", later_scene_id),
-                )
-            ).first()
+            selected.filter(ee.Filter.eq("system:index", later_system_id)).first()
         )
         earlier_bands = tuple(str(value) for value in metadata[earlier_scene_id].get("band_names", ()))
         later_bands = tuple(str(value) for value in metadata[later_scene_id].get("band_names", ()))
