@@ -887,10 +887,7 @@ def _observe_earth_engine_spatial_difference(
     try:
         _initialize_ee(ee, settings.gee_project_id, settings.gee_credentials_path)
         region = ee.Geometry(geometry.__geo_interface__)
-        scene_filter = ee.Filter.Or(
-            ee.Filter.inList("system:index", [earlier_scene_id, later_scene_id]),
-            ee.Filter.inList("PRODUCT_ID", [earlier_scene_id, later_scene_id]),
-        )
+        scene_filter = _spatial_scene_filter(ee, (earlier_scene_id, later_scene_id))
         selected = ee.ImageCollection(OPTICAL_COLLECTION).filter(scene_filter).sort("system:time_start")
         metadata_features = selected.map(
             lambda image: ee.Feature(
@@ -1257,6 +1254,20 @@ def _parse_spatial_scene_metadata(
             if value:
                 metadata[str(value)] = properties
     return metadata
+
+
+def _spatial_scene_filter(ee: Any, scene_ids: Sequence[str]) -> Any:
+    """Build the cheapest lookup filter while retaining mixed-ID support."""
+    product_ids = [scene_id for scene_id in scene_ids if "_MSIL2A_" in scene_id]
+    system_ids = [scene_id for scene_id in scene_ids if scene_id not in product_ids]
+    filters = []
+    if product_ids:
+        filters.append(ee.Filter.inList("PRODUCT_ID", product_ids))
+    if system_ids:
+        filters.append(ee.Filter.inList("system:index", system_ids))
+    if len(filters) == 1:
+        return filters[0]
+    return ee.Filter.Or(*filters)
 
 
 def _safe_filename_token(value: str | None, fallback: str) -> str:
