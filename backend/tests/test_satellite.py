@@ -1,6 +1,7 @@
 """Satellite seat tests; all tests are offline and use injected adapters."""
 
 import asyncio
+import inspect
 import struct
 import zlib
 from datetime import date, timedelta
@@ -637,3 +638,10 @@ def test_overlay_failure_returns_null_and_cleans_temporary_file(monkeypatch):
 
 def test_observation_bounds_remain_west_south_east_north():
     assert tuple(sat.validate_polygon(PLOT).bounds) == (-7.5898, 33.5731, -7.5888, 33.574)
+
+
+def test_spatial_difference_keeps_projection_alignment_lazy():
+    source = inspect.getsource(sat._observe_earth_engine_spatial_difference)
+    assert "reproject(target_projection)" not in source
+    assert source.count("setDefaultProjection(target_projection)") == 6
+    assert "crs=target_projection" in source
