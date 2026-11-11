@@ -952,14 +952,16 @@ def _observe_earth_engine_spatial_difference(
         later_ndvi = later_ndvi.reproject(target_projection)
         later_ndmi = later_ndmi.reproject(target_projection)
         later_valid = later_valid.reproject(target_projection)
+        earlier_valid = earlier_valid.rename("earlier_valid")
+        later_valid = later_valid.rename("later_valid")
         shared_valid = earlier_valid.And(later_valid).rename("shared_valid")
         delta_ndvi = later_ndvi.subtract(earlier_ndvi).updateMask(shared_valid).rename("delta_NDVI")
         delta_ndmi = later_ndmi.subtract(earlier_ndmi).updateMask(shared_valid).rename("delta_NDMI")
         stats = ee.Image.cat([earlier_valid, later_valid, shared_valid]).reduceRegion(
             ee.Reducer.mean(), region, 10, maxPixels=1_000_000, bestEffort=True
         ).getInfo()
-        earlier_pct = _fraction_to_pct(stats.get("valid"))
-        later_pct = _fraction_to_pct(stats.get("valid_1"))
+        earlier_pct = _fraction_to_pct(stats.get("earlier_valid"))
+        later_pct = _fraction_to_pct(stats.get("later_valid"))
         shared_pct = _fraction_to_pct(stats.get("shared_valid"))
         # Earth Engine renames the duplicate valid bands deterministically;
         # fail closed if any coverage statistic is absent.
