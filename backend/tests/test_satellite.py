@@ -6,6 +6,8 @@ import zlib
 from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
+
 from app.core.config import settings
 from app.services import satellite_service as sat
 
@@ -30,6 +32,18 @@ class FakeClient:
     def observe(self, geometry, start, end):
         self.calls.append((geometry, start, end))
         return self.observation
+
+
+class FakeTimeSeriesClient:
+    """Deterministic stand-in for one Earth Engine collection response."""
+
+    def __init__(self, acquisitions):
+        self.acquisitions = acquisitions
+        self.calls = []
+
+    def observe_many(self, geometry, start, end):
+        self.calls.append((geometry, start, end))
+        return self.acquisitions
 
 
 def run(coro):
@@ -236,6 +250,93 @@ def test_observation_window_is_forwarded():
     _, start, end = client.calls[0]
     assert start.isoformat() == "2026-10-10"
     assert end.isoformat() == "2026-10-20"
+
+
+def test_fetch_acquisitions_sorts_deduplicates_and_filters_mocked_collection():
+    bounds = tuple(sat.validate_polygon(PLOT).bounds)
+    client = FakeTimeSeriesClient(
+        [
+            sat.SatelliteAcquisition("scene-b", "2026-01-20", 0.55, 0.12, 92, "good", bounds=bounds),
+            sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good", bounds=bounds),
+            sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good", bounds=bounds),
+            sat.SatelliteAcquisition("scene-outside", "2025-12-31", 0.9, 0.4, 99, "good", bounds=bounds),
+            sat.SatelliteAcquisition("radar-scene", "2026-01-15", None, None, None, "radar_fallback", "sentinel-1", bounds=bounds),
+        ]
+    )
+
+    result = run(
+        sat.fetch_acquisitions(
+            geojson=PLOT,
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            client=client,
+        )
+    )
+
+    assert [item.scene_id for item in result] == ["scene-a", "scene-b"]
+    assert [item.observed_at for item in result] == ["2026-01-10", "2026-01-20"]
+    assert result[0].bounds == bounds
+    assert client.calls[0][1].isoformat() == "2026-01-01"
+    assert client.calls[0][2].isoformat() == "2026-01-31"
+
+
+def test_fetch_acquisitions_supports_max_count_without_requerying():
+    client = FakeTimeSeriesClient(
+        [
+            sat.SatelliteAcquisition("scene-a", "2026-01-01", 0.4, 0.1, 90, "good"),
+            sat.SatelliteAcquisition("scene-b", "2026-01-02", 0.5, 0.2, 90, "good"),
+        ]
+    )
+    result = run(sat.fetch_acquisitions(geojson=PLOT, start_date="2026-01-01", end_date="2026-01-03", client=client, max_acquisitions=1))
+    assert len(result) == 1
+    assert len(client.calls) == 1
+
+
+def test_compare_acquisitions_returns_raw_index_changes_and_shared_coverage():
+    bounds = tuple(sat.validate_polygon(PLOT).bounds)
+    earlier = sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good", bounds=bounds)
+    later = sat.SatelliteAcquisition("scene-b", "2026-01-20", 0.55, 0.12, 75, "good", bounds=bounds)
+
+    result = sat.compare_acquisitions(earlier, later)
+
+    assert result.ndvi_change == 0.13
+    assert result.ndmi_change == -0.06
+    assert result.valid_pixel_pct == 75
+    assert result.quality == "compatible"
+    assert result.earlier_scene_id == "scene-a"
+    assert result.later_scene_id == "scene-b"
+    assert result.bounds == bounds
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("quality", "low_valid_pixels", "observation_quality_not_good"),
+        ("valid_pixel_pct", 69, "observation_coverage_below_threshold"),
+        ("ndvi", None, "observation_indices_missing"),
+        ("ndmi", None, "observation_indices_missing"),
+    ],
+)
+def test_compare_acquisitions_rejects_incompatible_quality(field, value, reason):
+    bounds = tuple(sat.validate_polygon(PLOT).bounds)
+    earlier = sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good", bounds=bounds)
+    later_kwargs = {"scene_id": "scene-b", "observed_at": "2026-01-20", "ndvi": 0.55, "ndmi": 0.12, "valid_pixel_pct": 75, "quality": "good", "bounds": bounds}
+    later_kwargs[field] = value
+    later = sat.SatelliteAcquisition(**later_kwargs)
+
+    with pytest.raises(sat.IncompatibleSatelliteObservations, match=reason):
+        sat.compare_acquisitions(earlier, later)
+
+
+def test_compare_acquisitions_rejects_geometry_source_and_date_mismatch():
+    bounds = tuple(sat.validate_polygon(PLOT).bounds)
+    earlier = sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good", bounds=bounds)
+    with pytest.raises(sat.IncompatibleSatelliteObservations, match="geometry_mismatch"):
+        sat.compare_acquisitions(earlier, sat.SatelliteAcquisition("scene-b", "2026-01-20", 0.5, 0.2, 88, "good", bounds=(-8, 33, -7, 34)))
+    with pytest.raises(sat.IncompatibleSatelliteObservations, match="dates_not_chronological"):
+        sat.compare_acquisitions(earlier, sat.SatelliteAcquisition("scene-b", "2026-01-05", 0.5, 0.2, 88, "good", bounds=bounds))
+    with pytest.raises(sat.IncompatibleSatelliteObservations, match="optical_sentinel2_only"):
+        sat.compare_acquisitions(earlier, sat.SatelliteAcquisition("radar", "2026-01-20", None, None, None, "radar_fallback", "sentinel-1", bounds=bounds))
 
 
 def _rgba_png() -> bytes:
