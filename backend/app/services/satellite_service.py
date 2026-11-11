@@ -892,10 +892,6 @@ def _observe_earth_engine_spatial_difference(
             ee.Filter.inList("PRODUCT_ID", [earlier_scene_id, later_scene_id]),
         )
         selected = ee.ImageCollection(OPTICAL_COLLECTION).filter(scene_filter).sort("system:time_start")
-        count = int(selected.size().getInfo())
-        if count != 2:
-            raise IncompatibleSatelliteObservations("scene_not_found")
-
         metadata_features = selected.map(
             lambda image: ee.Feature(
                 None,
@@ -903,16 +899,13 @@ def _observe_earth_engine_spatial_difference(
                     "scene_id": image.get("system:index"),
                     "product_id": image.get("PRODUCT_ID"),
                     "observed_ms": image.get("system:time_start"),
+                    "band_names": image.bandNames(),
                 },
             )
         ).getInfo().get("features", [])
-        metadata: dict[str, Mapping[str, Any]] = {}
-        for feature in metadata_features:
-            properties = feature.get("properties", {})
-            for key in ("scene_id", "product_id"):
-                value = properties.get(key)
-                if value:
-                    metadata[str(value)] = properties
+        if len(metadata_features) != 2:
+            raise IncompatibleSatelliteObservations("scene_not_found")
+        metadata = _parse_spatial_scene_metadata(metadata_features)
         if earlier_scene_id not in metadata or later_scene_id not in metadata:
             raise IncompatibleSatelliteObservations("scene_not_found")
         earlier_observed = _timestamp_to_date(metadata[earlier_scene_id].get("observed_ms"))
@@ -936,8 +929,8 @@ def _observe_earth_engine_spatial_difference(
                 )
             ).first()
         )
-        earlier_bands = tuple(str(value) for value in earlier_image.bandNames().getInfo())
-        later_bands = tuple(str(value) for value in later_image.bandNames().getInfo())
+        earlier_bands = tuple(str(value) for value in metadata[earlier_scene_id].get("band_names", ()))
+        later_bands = tuple(str(value) for value in metadata[later_scene_id].get("band_names", ()))
         missing_earlier = missing_required_bands(earlier_bands)
         missing_later = missing_required_bands(later_bands)
         if missing_earlier or missing_later:
@@ -1251,6 +1244,22 @@ def _scene_identifier(properties: Mapping[str, Any]) -> str | None:
         if value:
             return str(value)
     return None
+
+
+def _parse_spatial_scene_metadata(
+    features: Sequence[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    """Index one bounded Earth Engine metadata response by both scene IDs."""
+    metadata: dict[str, Mapping[str, Any]] = {}
+    for feature in features:
+        properties = feature.get("properties", {})
+        if not isinstance(properties, Mapping):
+            continue
+        for key in ("scene_id", "product_id"):
+            value = properties.get(key)
+            if value:
+                metadata[str(value)] = properties
+    return metadata
 
 
 def _safe_filename_token(value: str | None, fallback: str) -> str:
