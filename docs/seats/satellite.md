@@ -81,10 +81,14 @@ No Backend file was changed in this implementation.
 `backend/app/services/satellite_service.py` also exposes the Satellite-owned
 optical time-series seam without changing the shared contract:
 
-- `fetch_acquisitions(geojson, start_date, end_date)` returns sorted,
+- `fetch_acquisitions(geojson, start_date, end_date, max_acquisitions=None)` returns sorted,
   de-duplicated `SatelliteAcquisition` values with `scene_id`, acquisition
   date, `ndvi`, explicit `ndmi` (the same Gao formula retained as contract
   `ndwi`), valid-pixel percentage, quality, bounds, and provider metadata.
+  `max_acquisitions` is applied after chronological sorting and before
+  server-side reduction for Earth Engine; it therefore bounds provider work
+  deterministically. A missing value means all scenes in the requested date
+  range are processed.
 - `compare_acquisitions(earlier, later)` returns raw `ndvi_change`,
   `ndmi_change`, and minimum shared valid coverage only for compatible,
   chronological, same-geometry Sentinel-2 observations with `good` quality
@@ -94,3 +98,8 @@ Backend can later persist these observations or expose a plot-scoped history
 endpoint. Interface can use the returned dates and scene IDs for date
 selection and render separate NDVI/NDMI layers. Sentinel-1 is intentionally
 not part of this time-series path because it cannot provide optical indices.
+
+The Earth Engine implementation maps one summary feature per image on the
+server, combining NDVI, NDMI, valid coverage, date, and scene ID into one
+FeatureCollection response. It does not download images or issue separate
+regional `getInfo()` calls for each acquisition.

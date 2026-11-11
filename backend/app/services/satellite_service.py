@@ -330,7 +330,13 @@ async def fetch_acquisitions(
     if client is not None:
         acquisitions = await asyncio.to_thread(client.observe_many, geometry, start, end)
     else:
-        acquisitions = await asyncio.to_thread(_observe_earth_engine_series, geometry, start, end)
+        acquisitions = await asyncio.to_thread(
+            _observe_earth_engine_series,
+            geometry,
+            start,
+            end,
+            max_acquisitions,
+        )
 
     normalized = _normalize_acquisitions(acquisitions, geometry, start, end)
     return normalized[:max_acquisitions] if max_acquisitions is not None else normalized
@@ -648,8 +654,9 @@ def _observe_earth_engine_series(
     geometry: BaseGeometry,
     start: date,
     end: date,
+    max_acquisitions: int | None = None,
 ) -> list[SatelliteAcquisition]:
-    """Read a Sentinel-2 collection once and reduce each acquisition."""
+    """Reduce a bounded Sentinel-2 collection server-side in one batch."""
     try:
         import ee  # type: ignore
     except ImportError as exc:
@@ -667,83 +674,121 @@ def _observe_earth_engine_series(
             .filterDate(start.isoformat(), (end + timedelta(days=1)).isoformat())
             .sort("system:time_start")
         )
+        if max_acquisitions is not None:
+            collection = collection.limit(max_acquisitions)
         count = int(collection.size().getInfo())
         if count == 0:
             return []
-        images = collection.toList(count)
-        return [
-            _observe_earth_engine_acquisition(ee.Image(images.get(index)), geometry, region, ee)
-            for index in range(count)
-        ]
+
+        # Sentinel-2 SR scenes in one collection share the required band
+        # schema. Check it once instead of issuing band/property requests per
+        # image. Missing-band output remains explicit and null-valued.
+        first_bands = tuple(str(value) for value in ee.Image(collection.first()).bandNames().getInfo())
+        missing_bands = missing_required_bands(first_bands)
+
+        if missing_bands:
+            features = collection.map(
+                lambda image: ee.Feature(
+                    None,
+                    {
+                        "scene_id": image.get("system:index"),
+                        "observed_ms": image.get("system:time_start"),
+                    },
+                )
+            ).getInfo().get("features", [])
+            return _parse_batched_features(
+                features,
+                geometry,
+                start,
+                end,
+                quality="missing_bands",
+                quality_details={"available_bands": first_bands, "missing_bands": missing_bands},
+            )
+
+        def summarize(image: Any) -> Any:
+            scl = image.select("SCL")
+            mask = (
+                scl.neq(0)
+                .And(scl.neq(1))
+                .And(scl.neq(2))
+                .And(scl.neq(3))
+                .And(scl.neq(8))
+                .And(scl.neq(9))
+                .And(scl.neq(10))
+                .And(scl.neq(11))
+            )
+            masked = image.updateMask(mask)
+            reflectance = masked.select(list(REQUIRED_OPTICAL_BANDS)).divide(10000)
+            ndvi = reflectance.normalizedDifference(["B8", "B4"]).rename("NDVI")
+            ndmi = reflectance.normalizedDifference(["B8", "B11"]).rename("NDMI_GAO")
+            valid = masked.select(list(REQUIRED_OPTICAL_BANDS)).mask().reduce(ee.Reducer.min()).rename("valid")
+            summary = ee.Image.cat([ndvi, ndmi, valid]).reduceRegion(
+                ee.Reducer.mean(),
+                region,
+                10,
+                maxPixels=1_000_000,
+                bestEffort=True,
+            )
+            return ee.Feature(
+                None,
+                {
+                    "scene_id": image.get("system:index"),
+                    "observed_ms": image.get("system:time_start"),
+                    "ndvi": summary.get("NDVI"),
+                    "ndmi": summary.get("NDMI_GAO"),
+                    "valid_fraction": summary.get("valid"),
+                },
+            )
+
+        features = collection.map(summarize).getInfo().get("features", [])
+        return _parse_batched_features(features, geometry, start, end)
     except EarthEngineUnavailable:
         raise
     except Exception as exc:
         raise SatelliteServiceError("earth_engine_request_failed") from exc
 
 
-def _observe_earth_engine_acquisition(
-    image: Any,
+def _parse_batched_features(
+    features: Sequence[Mapping[str, Any]],
     geometry: BaseGeometry,
-    region: Any,
-    ee: Any,
-) -> SatelliteAcquisition:
-    """Compute parcel statistics for one already-selected Sentinel-2 image."""
-    scl = image.select("SCL")
-    mask = (
-        scl.neq(0)
-        .And(scl.neq(1))
-        .And(scl.neq(2))
-        .And(scl.neq(3))
-        .And(scl.neq(8))
-        .And(scl.neq(9))
-        .And(scl.neq(10))
-        .And(scl.neq(11))
-    )
-    masked = image.updateMask(mask)
-    available_bands = tuple(str(value) for value in image.bandNames().getInfo())
-    missing_bands = missing_required_bands(available_bands)
-    properties = image.getInfo().get("properties", {})
-    observed = _timestamp_to_date(properties.get("system:time_start"))
-    scene_id = _scene_identifier(properties)
-    bounds = tuple(float(value) for value in geometry.bounds)
-    details: dict[str, Any] = {
+    start: date,
+    end: date,
+    *,
+    quality: str | None = None,
+    quality_details: Mapping[str, Any] | None = None,
+) -> list[SatelliteAcquisition]:
+    """Convert one server-side FeatureCollection response into acquisitions."""
+    details = {
         "collection": OPTICAL_COLLECTION,
         "cloud_mask": "SCL",
         "required_bands": REQUIRED_OPTICAL_BANDS,
         "ndvi_formula": OVERLAY_FORMULAS["ndvi"],
         "ndmi_formula": OVERLAY_FORMULAS["ndmi"],
+        "processing": "server_side_batched",
+        **(quality_details or {}),
     }
-    if missing_bands:
-        return SatelliteAcquisition(
-            scene_id=scene_id,
-            observed_at=observed,
-            ndvi=None,
-            ndmi=None,
-            valid_pixel_pct=None,
-            quality="missing_bands",
-            bounds=bounds,
-            quality_details={**details, "available_bands": available_bands, "missing_bands": missing_bands},
+    acquisitions: list[SatelliteAcquisition] = []
+    for feature in features:
+        properties = feature.get("properties", feature)
+        observed = _timestamp_to_date(properties.get("observed_ms"))
+        ndvi = _optional_float(properties.get("ndvi"))
+        ndmi = _optional_float(properties.get("ndmi"))
+        valid_fraction = _optional_float(properties.get("valid_fraction"))
+        valid_pct = round(valid_fraction * 100.0, 2) if valid_fraction is not None else None
+        item_quality = quality or ("good" if valid_pct is not None and valid_pct >= MIN_VALID_PIXEL_PCT else "low_valid_pixels")
+        acquisitions.append(
+            SatelliteAcquisition(
+                scene_id=str(properties["scene_id"]) if properties.get("scene_id") else None,
+                observed_at=observed,
+                ndvi=None if quality else ndvi,
+                ndmi=None if quality else ndmi,
+                valid_pixel_pct=None if quality else valid_pct,
+                quality=item_quality,
+                bounds=tuple(float(value) for value in geometry.bounds),
+                quality_details=dict(details),
+            )
         )
-
-    reflectance = masked.select(list(REQUIRED_OPTICAL_BANDS)).divide(10000)
-    ndvi = reflectance.normalizedDifference(["B8", "B4"]).rename("NDVI")
-    ndmi = reflectance.normalizedDifference(["B8", "B11"]).rename("NDMI_GAO")
-    valid = masked.select(list(REQUIRED_OPTICAL_BANDS)).mask().reduce(ee.Reducer.min()).rename("valid")
-    stats = valid.reduceRegion(ee.Reducer.mean(), region, 10, maxPixels=1_000_000, bestEffort=True).getInfo()
-    valid_pct = round(float(stats.get("valid", 0.0)) * 100.0, 2) if stats.get("valid") is not None else None
-    ndvi_value = _region_mean(ndvi, region, ee)
-    ndmi_value = _region_mean(ndmi, region, ee)
-    quality = "good" if valid_pct is not None and valid_pct >= MIN_VALID_PIXEL_PCT else "low_valid_pixels"
-    return SatelliteAcquisition(
-        scene_id=scene_id,
-        observed_at=observed,
-        ndvi=ndvi_value,
-        ndmi=ndmi_value,
-        valid_pixel_pct=valid_pct,
-        quality=quality,
-        bounds=bounds,
-        quality_details=details,
-    )
+    return _normalize_acquisitions(acquisitions, geometry, start, end)
 
 
 def _observe_sentinel1(geometry: BaseGeometry, start: date, end: date) -> SatelliteObservation | None:
