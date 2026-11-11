@@ -98,6 +98,31 @@ def test_missing_required_band_is_diagnostic():
         raise AssertionError("missing required band was not rejected")
 
 
+def test_spatial_metadata_indexes_product_and_system_ids_and_preserves_bands():
+    features = [
+        {
+            "properties": {
+                "scene_id": "system-earlier",
+                "product_id": "product-earlier",
+                "observed_ms": 1,
+                "band_names": ["B4", "B8", "B11", "SCL"],
+            }
+        },
+        {
+            "properties": {
+                "scene_id": "system-later",
+                "product_id": "product-later",
+                "observed_ms": 2,
+                "band_names": ["B4", "B8", "SCL"],
+            }
+        },
+    ]
+    metadata = sat._parse_spatial_scene_metadata(features)
+    assert metadata["product-earlier"]["band_names"] == ["B4", "B8", "B11", "SCL"]
+    assert metadata["system-later"]["observed_ms"] == 2
+    assert sat.missing_required_bands(metadata["product-later"]["band_names"]) == ("B11",)
+
+
 def test_valid_pixel_percentage_and_scl_quality_threshold():
     assert sat.is_valid_scl(4) is True
     assert sat.is_valid_scl(3) is False
