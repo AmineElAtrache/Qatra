@@ -292,6 +292,69 @@ def test_fetch_acquisitions_supports_max_count_without_requerying():
     assert len(client.calls) == 1
 
 
+def test_batched_feature_response_matches_previous_normalization():
+    geometry = sat.validate_polygon(PLOT)
+    start = date(2026, 1, 1)
+    end = date(2026, 1, 31)
+    raw = [
+        sat.SatelliteAcquisition("scene-b", "2026-01-20", 0.55, 0.12, 92, "good"),
+        sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good"),
+        sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good"),
+    ]
+    previous_path = sat._normalize_acquisitions(raw, geometry, start, end)
+    batched_features = [
+        {"properties": {"scene_id": "scene-b", "observed_ms": 1768867200000, "ndvi": 0.55, "ndmi": 0.12, "valid_fraction": 0.92}},
+        {"properties": {"scene_id": "scene-a", "observed_ms": 1768003200000, "ndvi": 0.42, "ndmi": 0.18, "valid_fraction": 0.88}},
+        {"properties": {"scene_id": "scene-a", "observed_ms": 1768003200000, "ndvi": 0.42, "ndmi": 0.18, "valid_fraction": 0.88}},
+    ]
+    optimized_path = sat._parse_batched_features(batched_features, geometry, start, end)
+
+    assert [(item.scene_id, item.observed_at, item.ndvi, item.ndmi, item.valid_pixel_pct, item.quality) for item in optimized_path] == [
+        (item.scene_id, item.observed_at, item.ndvi, item.ndmi, item.valid_pixel_pct, item.quality)
+        for item in previous_path
+    ]
+
+
+def test_batched_feature_response_preserves_nulls_and_quality():
+    geometry = sat.validate_polygon(PLOT)
+    result = sat._parse_batched_features(
+        [
+            {"properties": {"scene_id": "cloudy", "observed_ms": 1791372116371, "ndvi": None, "ndmi": None, "valid_fraction": 0.0}},
+            {"properties": {"scene_id": "partial", "observed_ms": 1791804118187, "ndvi": 0.4, "ndmi": None, "valid_fraction": 0.69}},
+        ],
+        geometry,
+        date(2026, 1, 1),
+        date(2026, 12, 31),
+    )
+    assert result[0].ndvi is None and result[0].ndmi is None
+    assert result[0].valid_pixel_pct == 0.0
+    assert result[0].quality == "low_valid_pixels"
+    assert result[1].ndvi == 0.4 and result[1].ndmi is None
+    assert result[1].valid_pixel_pct == 69.0
+    assert result[1].quality == "low_valid_pixels"
+    assert result[0].quality_details["processing"] == "server_side_batched"
+
+
+def test_earth_engine_temporal_path_receives_deterministic_max_count(monkeypatch):
+    calls = []
+
+    def fake_series(geometry, start, end, max_acquisitions=None):
+        calls.append((start, end, max_acquisitions))
+        return [sat.SatelliteAcquisition("scene-a", "2026-01-01", 0.4, 0.1, 90, "good")]
+
+    monkeypatch.setattr(sat, "_observe_earth_engine_series", fake_series)
+    result = run(
+        sat.fetch_acquisitions(
+            geojson=PLOT,
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            max_acquisitions=1,
+        )
+    )
+    assert len(result) == 1
+    assert calls == [(date(2026, 1, 1), date(2026, 1, 31), 1)]
+
+
 def test_compare_acquisitions_returns_raw_index_changes_and_shared_coverage():
     bounds = tuple(sat.validate_polygon(PLOT).bounds)
     earlier = sat.SatelliteAcquisition("scene-a", "2026-01-10", 0.42, 0.18, 88, "good", bounds=bounds)
