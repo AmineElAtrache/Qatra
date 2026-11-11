@@ -46,6 +46,16 @@ class FakeTimeSeriesClient:
         return self.acquisitions
 
 
+class FakeSpatialDifferenceClient:
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def compare_scenes(self, geometry, earlier_scene_id, later_scene_id, generate_overlay):
+        self.calls.append((geometry, earlier_scene_id, later_scene_id, generate_overlay))
+        return self.result
+
+
 def run(coro):
     return asyncio.run(coro)
 
@@ -402,6 +412,71 @@ def test_compare_acquisitions_rejects_geometry_source_and_date_mismatch():
         sat.compare_acquisitions(earlier, sat.SatelliteAcquisition("radar", "2026-01-20", None, None, None, "radar_fallback", "sentinel-1", bounds=bounds))
 
 
+def test_compute_spatial_difference_sign_and_intersection_mask():
+    delta_ndvi, delta_ndmi, shared_pct = sat.compute_spatial_difference(
+        [0.20, 0.40, 0.60],
+        [0.30, 0.10, 0.70],
+        [0.10, 0.20, 0.30],
+        [0.20, 0.10, 0.10],
+        [True, True, False],
+        [True, False, True],
+    )
+    assert delta_ndvi == [0.1, None, None]
+    assert delta_ndmi == [0.1, None, None]
+    assert shared_pct == 33.33
+
+
+def test_compute_spatial_difference_rejects_unaligned_grids():
+    with pytest.raises(sat.IncompatibleSatelliteObservations, match="spatial_grid_shape_mismatch"):
+        sat.compute_spatial_difference([0.2], [0.3, 0.4], [0.1], [0.2], [True], [True])
+
+
+def test_compare_scene_maps_uses_explicit_ids_and_preserves_bounds():
+    bounds = tuple(sat.validate_polygon(PLOT).bounds)
+    expected = sat.SatelliteSpatialDifference(
+        "scene-a", "scene-b", "2026-01-01", "2026-01-20", None, None, 88.0, 90.0, 92.0, "good", bounds
+    )
+    client = FakeSpatialDifferenceClient(expected)
+    result = run(
+        sat.compare_scene_maps(
+            geojson=PLOT,
+            earlier_scene_id="scene-a",
+            later_scene_id="scene-b",
+            generate_overlay=False,
+            client=client,
+        )
+    )
+    assert result is expected
+    assert client.calls[0][1:] == ("scene-a", "scene-b", False)
+    assert result.bounds == bounds
+
+
+def test_compare_scene_maps_rejects_same_or_missing_scene_selection():
+    with pytest.raises(sat.IncompatibleSatelliteObservations, match="distinct_scene_ids_required"):
+        run(sat.compare_scene_maps(geojson=PLOT, earlier_scene_id="scene-a", later_scene_id="scene-a"))
+    with pytest.raises(sat.IncompatibleSatelliteObservations, match="distinct_scene_ids_required"):
+        run(sat.compare_scene_maps(geojson=PLOT, earlier_scene_id="", later_scene_id="scene-b"))
+
+
+def test_compare_scene_maps_rejects_low_quality_client_result():
+    bounds = tuple(sat.validate_polygon(PLOT).bounds)
+    client = FakeSpatialDifferenceClient(
+        sat.SatelliteSpatialDifference(
+            "scene-a", "scene-b", "2026-01-01", "2026-01-20", None, None, 40.0, 90.0, 90.0, "low_valid_pixels", bounds
+        )
+    )
+    with pytest.raises(sat.IncompatibleSatelliteObservations, match="observation_quality_not_good"):
+        run(
+            sat.compare_scene_maps(
+                geojson=PLOT,
+                earlier_scene_id="scene-a",
+                later_scene_id="scene-b",
+                generate_overlay=False,
+                client=client,
+            )
+        )
+
+
 def _rgba_png() -> bytes:
     """Small 2x1 PNG with one transparent and one opaque pixel."""
     signature = b"\x89PNG\r\n\x1a\n"
@@ -494,6 +569,30 @@ def test_ndvi_and_ndmi_overlay_types_use_distinct_palettes_and_metadata(request,
         assert metadata["path"] == str(outputs[-1])
 
     request.addfinalizer(lambda: [path.unlink(missing_ok=True) for path in outputs])
+
+
+def test_delta_overlays_use_symmetric_diverging_palette_and_transparency(request, monkeypatch):
+    overlay_dir = Path("artifacts")
+    image = FakeOverlayImage()
+    monkeypatch.setattr(settings, "satellite_overlay_dir", str(overlay_dir))
+    monkeypatch.setattr(sat.urllib.request, "urlretrieve", lambda url, target: Path(target).write_bytes(_rgba_png()))
+    result = sat._render_overlay(
+        image,
+        "polygon-region",
+        "2026-11-01",
+        object(),
+        index_type="ndvi_delta",
+        plot_id="MA-001",
+        scene_id="scene-a__scene-b",
+        geometry_digest="geometry-a",
+    )
+    output = Path(result)
+    request.addfinalizer(lambda: output.unlink(missing_ok=True))
+    assert output.name.startswith("ndvi_delta_MA-001_")
+    assert image.visualize_args["min"] == -1
+    assert image.visualize_args["max"] == 1
+    assert image.visualize_args["palette"] == list(sat.OVERLAY_PALETTES["ndvi_delta"])
+    assert output.read_bytes()[25] == 6  # RGBA color type with transparency channel
 
 
 def test_overlay_filename_is_stable_and_distinct_per_plot_geometry_and_scene():
