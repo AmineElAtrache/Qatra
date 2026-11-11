@@ -54,6 +54,40 @@ class InvalidGeoJSON(SatelliteServiceError):
     """The supplied value is not a valid polygon GeoJSON object."""
 
 
+class IncompatibleSatelliteObservations(SatelliteServiceError):
+    """Raised when two observations cannot be compared safely."""
+
+
+@dataclass
+class SatelliteAcquisition:
+    """One optical Sentinel-2 acquisition for temporal analysis."""
+
+    scene_id: str | None
+    observed_at: str | None
+    ndvi: float | None
+    ndmi: float | None
+    valid_pixel_pct: float | None
+    quality: str
+    satellite_source: str = "sentinel-2"
+    bounds: tuple[float, float, float, float] | None = None
+    quality_details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SatelliteComparison:
+    """Difference between two compatible optical acquisitions."""
+
+    earlier_scene_id: str | None
+    later_scene_id: str | None
+    earlier_observed_at: str
+    later_observed_at: str
+    ndvi_change: float
+    ndmi_change: float
+    valid_pixel_pct: float
+    quality: str
+    bounds: tuple[float, float, float, float] | None = None
+
+
 @dataclass
 class SatelliteObservation:
     ndvi: float | None
@@ -82,6 +116,11 @@ class SatelliteObservation:
 
 class SceneClient(Protocol):
     def observe(self, geometry: BaseGeometry, start: date, end: date) -> SatelliteObservation:
+        ...
+
+
+class TimeSeriesSceneClient(Protocol):
+    def observe_many(self, geometry: BaseGeometry, start: date, end: date) -> Sequence[SatelliteAcquisition]:
         ...
 
 
@@ -263,6 +302,118 @@ async def fetch_indices(
     if not optical.quality:
         optical.quality = "incomplete_optical"
     return optical
+
+
+async def fetch_acquisitions(
+    *,
+    geojson: Mapping[str, Any] | BaseGeometry,
+    start_date: date | str,
+    end_date: date | str,
+    client: TimeSeriesSceneClient | None = None,
+    max_acquisitions: int | None = None,
+) -> list[SatelliteAcquisition]:
+    """Retrieve sorted, de-duplicated Sentinel-2 acquisitions for a parcel.
+
+    This is an optical-only time-series path. It deliberately does not invoke
+    Sentinel-1 fallback because radar cannot provide NDVI or NDMI. Provider
+    scenes are reused from one collection query, and comparison is performed
+    later on the returned observations without another Earth Engine request.
+    """
+    geometry = validate_polygon(geojson)
+    start = _as_date(start_date)
+    end = _as_date(end_date)
+    if start > end:
+        raise SatelliteServiceError("invalid_date_window")
+    if max_acquisitions is not None and max_acquisitions <= 0:
+        raise SatelliteServiceError("invalid_max_acquisitions")
+
+    if client is not None:
+        acquisitions = await asyncio.to_thread(client.observe_many, geometry, start, end)
+    else:
+        acquisitions = await asyncio.to_thread(_observe_earth_engine_series, geometry, start, end)
+
+    normalized = _normalize_acquisitions(acquisitions, geometry, start, end)
+    return normalized[:max_acquisitions] if max_acquisitions is not None else normalized
+
+
+def compare_acquisitions(
+    earlier: SatelliteAcquisition,
+    later: SatelliteAcquisition,
+) -> SatelliteComparison:
+    """Compare two compatible, high-quality optical acquisitions.
+
+    No agronomic threshold is applied. Changes are raw index differences and
+    must be interpreted by Backend/Agronomy with other observations.
+    """
+    if earlier.satellite_source != "sentinel-2" or later.satellite_source != "sentinel-2":
+        raise IncompatibleSatelliteObservations("optical_sentinel2_only")
+    if not earlier.observed_at or not later.observed_at:
+        raise IncompatibleSatelliteObservations("missing_observation_date")
+    if not earlier.scene_id or not later.scene_id:
+        raise IncompatibleSatelliteObservations("missing_scene_id")
+    if earlier.scene_id == later.scene_id:
+        raise IncompatibleSatelliteObservations("same_scene")
+    if earlier.observed_at >= later.observed_at:
+        raise IncompatibleSatelliteObservations("dates_not_chronological")
+    if earlier.bounds != later.bounds:
+        raise IncompatibleSatelliteObservations("geometry_mismatch")
+    for observation in (earlier, later):
+        if observation.quality != "good":
+            raise IncompatibleSatelliteObservations("observation_quality_not_good")
+        if observation.valid_pixel_pct is None or observation.valid_pixel_pct < MIN_VALID_PIXEL_PCT:
+            raise IncompatibleSatelliteObservations("observation_coverage_below_threshold")
+        if observation.ndvi is None or observation.ndmi is None:
+            raise IncompatibleSatelliteObservations("observation_indices_missing")
+
+    return SatelliteComparison(
+        earlier_scene_id=earlier.scene_id,
+        later_scene_id=later.scene_id,
+        earlier_observed_at=earlier.observed_at,
+        later_observed_at=later.observed_at,
+        ndvi_change=round(later.ndvi - earlier.ndvi, 6),
+        ndmi_change=round(later.ndmi - earlier.ndmi, 6),
+        valid_pixel_pct=min(earlier.valid_pixel_pct, later.valid_pixel_pct),
+        quality="compatible",
+        bounds=earlier.bounds,
+    )
+
+
+def _normalize_acquisitions(
+    acquisitions: Sequence[SatelliteAcquisition],
+    geometry: BaseGeometry,
+    start: date,
+    end: date,
+) -> list[SatelliteAcquisition]:
+    normalized: list[SatelliteAcquisition] = []
+    seen: set[tuple[str | None, str]] = set()
+    bounds = tuple(float(value) for value in geometry.bounds)
+    for acquisition in acquisitions:
+        if acquisition.satellite_source != "sentinel-2" or not acquisition.observed_at:
+            continue
+        try:
+            observed = date.fromisoformat(acquisition.observed_at[:10])
+        except (TypeError, ValueError):
+            continue
+        if observed < start or observed > end:
+            continue
+        key = (acquisition.scene_id, acquisition.observed_at[:10])
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            SatelliteAcquisition(
+                scene_id=acquisition.scene_id,
+                observed_at=acquisition.observed_at,
+                ndvi=acquisition.ndvi,
+                ndmi=acquisition.ndmi,
+                valid_pixel_pct=acquisition.valid_pixel_pct,
+                quality=acquisition.quality,
+                satellite_source="sentinel-2",
+                bounds=acquisition.bounds or bounds,
+                quality_details=dict(acquisition.quality_details),
+            )
+        )
+    return sorted(normalized, key=lambda item: (item.observed_at or "", item.scene_id or ""))
 
 
 def sample_optical() -> SatelliteObservation:
@@ -491,6 +642,108 @@ def _observe_earth_engine(
         raise
     except Exception as exc:
         raise SatelliteServiceError("earth_engine_request_failed") from exc
+
+
+def _observe_earth_engine_series(
+    geometry: BaseGeometry,
+    start: date,
+    end: date,
+) -> list[SatelliteAcquisition]:
+    """Read a Sentinel-2 collection once and reduce each acquisition."""
+    try:
+        import ee  # type: ignore
+    except ImportError as exc:
+        raise EarthEngineUnavailable("earthengine_not_installed") from exc
+    from app.core.config import settings
+
+    if not settings.gee_project_id:
+        raise EarthEngineUnavailable("gee_project_id_missing")
+    try:
+        _initialize_ee(ee, settings.gee_project_id, settings.gee_credentials_path)
+        region = ee.Geometry(geometry.__geo_interface__)
+        collection = (
+            ee.ImageCollection(OPTICAL_COLLECTION)
+            .filterBounds(region)
+            .filterDate(start.isoformat(), (end + timedelta(days=1)).isoformat())
+            .sort("system:time_start")
+        )
+        count = int(collection.size().getInfo())
+        if count == 0:
+            return []
+        images = collection.toList(count)
+        return [
+            _observe_earth_engine_acquisition(ee.Image(images.get(index)), geometry, region, ee)
+            for index in range(count)
+        ]
+    except EarthEngineUnavailable:
+        raise
+    except Exception as exc:
+        raise SatelliteServiceError("earth_engine_request_failed") from exc
+
+
+def _observe_earth_engine_acquisition(
+    image: Any,
+    geometry: BaseGeometry,
+    region: Any,
+    ee: Any,
+) -> SatelliteAcquisition:
+    """Compute parcel statistics for one already-selected Sentinel-2 image."""
+    scl = image.select("SCL")
+    mask = (
+        scl.neq(0)
+        .And(scl.neq(1))
+        .And(scl.neq(2))
+        .And(scl.neq(3))
+        .And(scl.neq(8))
+        .And(scl.neq(9))
+        .And(scl.neq(10))
+        .And(scl.neq(11))
+    )
+    masked = image.updateMask(mask)
+    available_bands = tuple(str(value) for value in image.bandNames().getInfo())
+    missing_bands = missing_required_bands(available_bands)
+    properties = image.getInfo().get("properties", {})
+    observed = _timestamp_to_date(properties.get("system:time_start"))
+    scene_id = _scene_identifier(properties)
+    bounds = tuple(float(value) for value in geometry.bounds)
+    details: dict[str, Any] = {
+        "collection": OPTICAL_COLLECTION,
+        "cloud_mask": "SCL",
+        "required_bands": REQUIRED_OPTICAL_BANDS,
+        "ndvi_formula": OVERLAY_FORMULAS["ndvi"],
+        "ndmi_formula": OVERLAY_FORMULAS["ndmi"],
+    }
+    if missing_bands:
+        return SatelliteAcquisition(
+            scene_id=scene_id,
+            observed_at=observed,
+            ndvi=None,
+            ndmi=None,
+            valid_pixel_pct=None,
+            quality="missing_bands",
+            bounds=bounds,
+            quality_details={**details, "available_bands": available_bands, "missing_bands": missing_bands},
+        )
+
+    reflectance = masked.select(list(REQUIRED_OPTICAL_BANDS)).divide(10000)
+    ndvi = reflectance.normalizedDifference(["B8", "B4"]).rename("NDVI")
+    ndmi = reflectance.normalizedDifference(["B8", "B11"]).rename("NDMI_GAO")
+    valid = masked.select(list(REQUIRED_OPTICAL_BANDS)).mask().reduce(ee.Reducer.min()).rename("valid")
+    stats = valid.reduceRegion(ee.Reducer.mean(), region, 10, maxPixels=1_000_000, bestEffort=True).getInfo()
+    valid_pct = round(float(stats.get("valid", 0.0)) * 100.0, 2) if stats.get("valid") is not None else None
+    ndvi_value = _region_mean(ndvi, region, ee)
+    ndmi_value = _region_mean(ndmi, region, ee)
+    quality = "good" if valid_pct is not None and valid_pct >= MIN_VALID_PIXEL_PCT else "low_valid_pixels"
+    return SatelliteAcquisition(
+        scene_id=scene_id,
+        observed_at=observed,
+        ndvi=ndvi_value,
+        ndmi=ndmi_value,
+        valid_pixel_pct=valid_pct,
+        quality=quality,
+        bounds=bounds,
+        quality_details=details,
+    )
 
 
 def _observe_sentinel1(geometry: BaseGeometry, start: date, end: date) -> SatelliteObservation | None:

@@ -75,3 +75,22 @@ No Backend file was changed in this implementation.
 ## Contract fields
 
 `ndvi`, `ndwi`, `ndvi_observed_at`, `valid_pixel_pct`, `satellite_source`
+
+## Temporal monitoring seam
+
+`backend/app/services/satellite_service.py` also exposes the Satellite-owned
+optical time-series seam without changing the shared contract:
+
+- `fetch_acquisitions(geojson, start_date, end_date)` returns sorted,
+  de-duplicated `SatelliteAcquisition` values with `scene_id`, acquisition
+  date, `ndvi`, explicit `ndmi` (the same Gao formula retained as contract
+  `ndwi`), valid-pixel percentage, quality, bounds, and provider metadata.
+- `compare_acquisitions(earlier, later)` returns raw `ndvi_change`,
+  `ndmi_change`, and minimum shared valid coverage only for compatible,
+  chronological, same-geometry Sentinel-2 observations with `good` quality
+  and at least 70% valid pixels. It applies no agronomic thresholds.
+
+Backend can later persist these observations or expose a plot-scoped history
+endpoint. Interface can use the returned dates and scene IDs for date
+selection and render separate NDVI/NDMI layers. Sentinel-1 is intentionally
+not part of this time-series path because it cannot provide optical indices.
