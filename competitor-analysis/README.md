@@ -1,6 +1,6 @@
 # Rapport d'intelligence concurrentielle : CROPWAT&#32;
 
-****                                                                                                            **   Analyzed by:** DevOps Engineer Zakariae
+****                                                                                                            **Analyzed by:** DevOps Engineer Zakariae
 
 ## 1. Présentation et positionnement
 
