@@ -17,7 +17,7 @@ export default function TopBar() {
   const path = usePathname();
   const router = useRouter();
   const { session, signOut } = useSession();
-  if (path === "/" || path === "/login") return null;
+  if (path === "/" || path === "/login" || path === "/register") return null;
 
   const links = LINKS.filter((l) => !session || l.role === session.role);
 

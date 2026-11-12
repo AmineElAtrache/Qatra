@@ -9,10 +9,10 @@ import { login, register } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import type { Session } from "@/lib/types";
 
-export default function AuthScreen() {
+export default function AuthScreen({ initialMode = "login" }: { initialMode?: "login" | "register" }) {
   const { session, ready, signIn } = useSession();
   const router = useRouter();
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register">(initialMode);
   const [role, setRole] = useState<Session["role"]>("farmer");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
